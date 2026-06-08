@@ -15,6 +15,7 @@
 
 - **修复 ColorOS 16 等系统下更新配置闪退问题**：优化了配置初始化与读取机制，将强制读取 JSON 属性替换为安全的 `optBoolean` 缺省读取模式，并在生命周期入口补充默认值注入，彻底解决启动或重建时因 Xposed 服务连接延迟出现 `JSONException: No value for disableAutoCleanNotification` 的闪退报错。
 - **修复重启应用后已勾选应用状态显示为“未选中”的 Bug**：优化了 XposedService 异步状态绑定逻辑，设计并实现了 `updateAllowList` 数据源深度刷新机制，彻底解决因服务异步加载与界面构建顺序竞态导致的已勾选状态在重新打开时丢失的显示异常。
+- **修复 OxygenOS 等系统上重启 App 勾选状态无法恢复的问题**：引入本地 SharedPreferences 缓存机制作为配置加载兜底方案。每次保存配置时同时写入本地缓存，App 启动时优先从本地缓存即时恢复勾选状态，不再完全依赖 LSPosed 远程服务的异步绑定，彻底解决因远程服务绑定慢或不可用导致的 UI 状态丢失问题。
 
 ### lsposed作用域
 - 在miui/hyperos上如果推送没有问题，就不需要勾选电量和性能

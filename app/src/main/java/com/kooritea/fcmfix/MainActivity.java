@@ -53,6 +53,7 @@ public class MainActivity extends AppCompatActivity {
     private static XposedService xposedService;
     Set<String> allowList = new HashSet<>();
     JSONObject config = new JSONObject();
+    private static final String LOCAL_PREFS_NAME = "fcmfix_local_config";
 
     private SharedPreferences getRemotePreferencesOrNull() {
         if (xposedService == null) {
@@ -126,6 +127,41 @@ public class MainActivity extends AppCompatActivity {
             this.config.put("noResponseNotification", pref.getBoolean("noResponseNotification", false));
         } catch (JSONException e) {
             Log.e("loadRemoteConfig", e.toString());
+        }
+        // Sync remote config to local cache for next startup
+        saveConfigToLocal();
+    }
+
+    private void saveConfigToLocal() {
+        try {
+            SharedPreferences localPrefs = getSharedPreferences(LOCAL_PREFS_NAME, Context.MODE_PRIVATE);
+            localPrefs.edit()
+                    .putStringSet("allowList", new HashSet<>(this.allowList))
+                    .putBoolean("disableAutoCleanNotification", this.config.optBoolean("disableAutoCleanNotification", false))
+                    .putBoolean("includeIceBoxDisableApp", this.config.optBoolean("includeIceBoxDisableApp", false))
+                    .putBoolean("noResponseNotification", this.config.optBoolean("noResponseNotification", false))
+                    .putBoolean("hasLocalCache", true)
+                    .apply();
+        } catch (Throwable e) {
+            Log.e("saveConfigToLocal", e.toString());
+        }
+    }
+
+    private void loadConfigFromLocal() {
+        try {
+            SharedPreferences localPrefs = getSharedPreferences(LOCAL_PREFS_NAME, Context.MODE_PRIVATE);
+            if (!localPrefs.getBoolean("hasLocalCache", false)) {
+                return;
+            }
+            this.allowList.clear();
+            this.allowList.addAll(localPrefs.getStringSet("allowList", new HashSet<>()));
+            this.config.put("allowList", new JSONArray(this.allowList));
+            this.config.put("disableAutoCleanNotification", localPrefs.getBoolean("disableAutoCleanNotification", false));
+            this.config.put("includeIceBoxDisableApp", localPrefs.getBoolean("includeIceBoxDisableApp", false));
+            this.config.put("noResponseNotification", localPrefs.getBoolean("noResponseNotification", false));
+            Log.d("loadConfigFromLocal", "Loaded local cache, allowList size: " + this.allowList.size());
+        } catch (Throwable e) {
+            Log.e("loadConfigFromLocal", e.toString());
         }
     }
 
@@ -277,6 +313,7 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         ensureDefaultConfigValues();
+        loadConfigFromLocal();
         RecyclerView recyclerView = findViewById(R.id.recycler_view);
         recyclerView.setLayoutManager(new LinearLayoutManager(this));
 
@@ -329,6 +366,7 @@ public class MainActivity extends AppCompatActivity {
             if (!saved) {
                 throw new IllegalStateException("配置写入失败");
             }
+            saveConfigToLocal();
             this.sendBroadcast(new Intent("com.kooritea.fcmfix.update.config"));
         } catch (Throwable e) {
             Log.e("updateConfig",e.toString());
