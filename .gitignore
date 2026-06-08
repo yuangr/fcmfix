@@ -7,3 +7,21 @@
 /captures
 .externalNativeBuild
 .cxx
+
+# APK / AAB / Signed bundles
+*.apk
+*.aab
+*.ap_
+
+# Debug / Test
+/app/debug/
+/app/release/
+**/test/
+**/androidTest/
+
+# Logs
+*.log
+
+# OS generated files
+Thumbs.db
+.DS_Store
