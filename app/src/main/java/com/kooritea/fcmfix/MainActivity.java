@@ -225,7 +225,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
                 if (!flag && packageInfo.services != null) {
-                    for (ActivityInfo serviceInfo : packageInfo.services) {
+                    for (android.content.pm.ServiceInfo serviceInfo : packageInfo.services) {
                         if (serviceInfo.name.contains("Firebase") ||
                             serviceInfo.name.contains("Fcm") ||
                             serviceInfo.name.contains("Gcm")) {
