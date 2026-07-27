@@ -235,7 +235,11 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
                 }
-                if (packageInfo.receivers == null && packageInfo.services == null) {
+                if ("com.tencent.mm".equals(packageInfo.packageName)) {
+                    flag = true;
+                    appInfo.includeFcm = true;
+                }
+                if (packageInfo.receivers == null && packageInfo.services == null && !flag) {
                     continue;
                 }
                 if(allowListSet.contains(appInfo.packageName)){

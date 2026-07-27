@@ -53,54 +53,74 @@ public class OplusProxyFix extends XposedModule {
 
     private void startHookOplusProxyBroadcast() {
         try {
-            Class<?> oplusProxyBroadcastClass = XposedHelpers.findClass("com.android.server.am.OplusProxyBroadcast", classLoader);
-            Class<?> resultEnum = XposedHelpers.findClass("com.android.server.am.OplusProxyBroadcast$RESULT", classLoader);
-            Object notIncludeValue = XposedHelpers.getStaticObjectField(resultEnum, "NOT_INCLUDE");
+            String[] classNames = {
+                "com.android.server.am.OplusProxyBroadcast",
+                "com.android.server.am.OplusProxyBroadcastEx",
+                "com.android.server.am.OplusBroadcastProxy"
+            };
+            boolean hooked = false;
+            for (String className : classNames) {
+                Class<?> oplusProxyBroadcastClass = XposedHelpers.findClassIfExists(className, classLoader);
+                if (oplusProxyBroadcastClass != null) {
+                    Class<?> resultEnum = XposedHelpers.findClassIfExists("com.android.server.am.OplusProxyBroadcast$RESULT", classLoader);
+                    final Object notIncludeValue = resultEnum != null ? XposedHelpers.getStaticObjectField(resultEnum, "NOT_INCLUDE") : null;
 
-            // Dynamically find shouldProxy method instead of hardcoding param count (COS15=8, COS16 may differ)
-            Method targetMethod = XposedUtils.tryFindMethodMostParam(oplusProxyBroadcastClass, "shouldProxy");
-            if (targetMethod == null) {
-                printLog("shouldProxy method not found in OplusProxyBroadcast");
-                return;
-            }
-            printLog("Hooked OplusProxyBroadcast.shouldProxy with " + targetMethod.getParameterCount() + " params");
+                    for (Method targetMethod : oplusProxyBroadcastClass.getDeclaredMethods()) {
+                        if ("shouldProxy".equals(targetMethod.getName())) {
+                            XposedBridge.hookMethod(targetMethod, new XC_MethodHook() {
+                                @Override
+                                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                                    String action = null;
+                                    String pkgName = null;
 
-            XposedBridge.hookMethod(targetMethod, new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    String action = null;
-                    String pkgName = null;
+                                    for (Object arg : param.args) {
+                                        if (arg instanceof Intent) {
+                                            Intent intent = (Intent) arg;
+                                            action = intent.getAction();
+                                            if (intent.getComponent() != null) {
+                                                pkgName = intent.getComponent().getPackageName();
+                                            } else {
+                                                pkgName = intent.getPackage();
+                                            }
+                                            break;
+                                        }
+                                    }
 
-                    // Extract from Intent parameter (most reliable, version-independent)
-                    for (Object arg : param.args) {
-                        if (arg instanceof Intent) {
-                            Intent intent = (Intent) arg;
-                            action = intent.getAction();
-                            if (intent.getComponent() != null) {
-                                pkgName = intent.getComponent().getPackageName();
-                            } else {
-                                pkgName = intent.getPackage();
-                            }
-                            break;
+                                    if (action == null) {
+                                        for (Object arg : param.args) {
+                                            if (arg instanceof String && isFCMAction((String) arg)) {
+                                                action = (String) arg;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    if (pkgName == null) {
+                                        for (Object arg : param.args) {
+                                            if (arg instanceof String && targetIsAllow((String) arg)) {
+                                                pkgName = (String) arg;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    if ((isFCMAction(action) || (action != null && isFCMAction(action))) && (pkgName == null || targetIsAllow(pkgName))) {
+                                        printLog("OplusProxyBroadcast: bypass pkg=" + pkgName + ", action=" + action, true);
+                                        if (notIncludeValue != null) {
+                                            param.setResult(notIncludeValue);
+                                        }
+                                    }
+                                }
+                            });
+                            printLog("Hooked " + className + ".shouldProxy (" + targetMethod.getParameterCount() + " params)");
+                            hooked = true;
                         }
-                    }
-
-                    // Fallback: search String parameters for FCM action
-                    if (action == null) {
-                        for (Object arg : param.args) {
-                            if (arg instanceof String && isFCMAction((String) arg)) {
-                                action = (String) arg;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (isFCMAction(action) && targetIsAllow(pkgName)) {
-                        printLog("shouldProxy: bypass pkg=" + pkgName + ", action=" + action);
-                        param.setResult(notIncludeValue);
                     }
                 }
-            });
+            }
+            if (!hooked) {
+                printLog("OplusProxyBroadcast.shouldProxy method not found in any class");
+            }
         } catch (Throwable e) {
             printLog("hook error OplusProxyBroadcast.shouldProxy: " + e.getMessage());
         }

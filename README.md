@@ -22,10 +22,10 @@
   - **BroadcastFix API 36 动态参数检测**：`broadcastIntentLocked` 在 Android 16 上增加参数索引自动验证与动态探测回退，避免因方法签名变化导致核心唤醒逻辑失效。
   - **shouldPreventSendReceiverReal 多版本适配**：支持多个类名和参数数量的自动探测，确保自启动拦截绕过在 ColorOS 16 上也能正常工作。
   - **缩短启动等待时间**：将开机后的 Hook 等待时间从 60 秒缩短至 30 秒，减少启动初期 FCM 消息丢失窗口。
-- **无死角 FCM 广播标志保底注入 & 动态 Target 包名深度解析 (v1.5)**：
-  - **动态 Target 包名深度提取 (extractTargetPackage)**：GMS 在最新 Android/ColorOS 上发送 FCM 广播时，`Intent` 的 `package` 和 `component` 可能均为空，导致之前 `targetIsAllow(null)` 返回 `false` 并跳过标志注入。现新增多级提取逻辑（依次检查 Component -> Intent Package -> Extras 键值 -> 方法形参），解决包名解析为空导致 Hook 跳过的问题。
-  - **FCM 广播强力保底注入 (Fallback Flag Injection)**：对于所有识别为 FCM 动作（`.c2dm.intent.RECEIVE` 等）的广播，即使包名未能解析出特定应用，也一律强制注入 `FLAG_INCLUDE_STOPPED_PACKAGES` (0x00000020) 标志，彻底封堵 Android 系统因缺少该标志在 2ms 内直接拒绝被停止应用的问题（`Failed to broadcast to stopped app`）。
-  - **修复 Sentinel 0 导致 0 号参数索引失效 bug**：将参数探测 sentinel 值从 `0` 修正为 `-1`，防止当 Intent 为第一个参数 (index 0) 时被误判为“未找到”而导致 Hook 放弃。
+- **ColorOS 16 深度重构与 Google Play 微信强力适配 (v1.6)**：
+  - **ColorOS 16 自启动/广播拦截全路径突破 (AutoStartFix)**：ColorOS 16 引入了 `OplusAppStartupManager` 和 `OplusHansManager` 的 `shouldPreventSendReceiverReal` / `shouldPreventSendReceiver` 校验。针对最新 GMS 广播隐蔽 Intent 结构的特点，v1.6 全面扫描形参中的 `Intent` 对象及 `intent` 成员字段，强制将 FCM 广播的拦截结果置为 `false`（不拦截），解决强停/冻结应用后 ColorOS 拦截广播的问题。
+  - **ColorOS 16 代理广播放行 (OplusProxyFix)**：支持 `OplusProxyBroadcast`、`OplusProxyBroadcastEx` 等候选类名，确保所有 FCM 广播绕过 ColorOS 代理队列。
+  - **Google Play 版微信 (com.tencent.mm) 显式识别**：在 `MainActivity` 中为 Google Play 版微信添加显式 FCM 标识，使用“全选包含 FCM 的应用”功能时将自动勾选微信。
 
 ### lsposed作用域
 - 在miui/hyperos上如果推送没有问题，就不需要勾选电量和性能

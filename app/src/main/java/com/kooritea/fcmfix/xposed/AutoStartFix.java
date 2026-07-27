@@ -160,56 +160,69 @@ public class AutoStartFix extends XposedModule {
         }
 
         try{
-            // oos15/cos15/cos16 — try multiple class names and param counts
+            // oos15/cos15/cos16 — try multiple class names, method names, and parameter structures
             String[] classNames = {
                 "com.android.server.am.OplusAppStartupManager",
-                "com.android.server.am.OplusAppStartupManagerService"
+                "com.android.server.am.OplusAppStartupManagerService",
+                "com.android.server.am.OplusHansManager",
+                "com.android.server.hans.OplusHansManager"
             };
             boolean hooked = false;
             for (String className : classNames) {
-                if (hooked) break;
                 try {
                     Class<?> clazz = XposedHelpers.findClass(className, classLoader);
-                    // Try param counts 4 and 5 (may vary across COS versions)
-                    Method method = XposedUtils.findMethod(clazz, "shouldPreventSendReceiverReal", 4);
-                    if (method == null) {
-                        method = XposedUtils.findMethod(clazz, "shouldPreventSendReceiverReal", 5);
-                    }
-                    if (method == null) {
-                        // Last resort: find any method with this name
-                        for (Method m : clazz.getDeclaredMethods()) {
-                            if ("shouldPreventSendReceiverReal".equals(m.getName())) {
-                                method = m;
-                                break;
-                            }
-                        }
-                    }
-                    if (method != null) {
-                        XposedBridge.hookMethod(method, new XC_MethodHook() {
-                            @Override
-                            protected void beforeHookedMethod(MethodHookParam methodHookParam) {
-                                if (methodHookParam.args[0] != null && XposedHelpers.getObjectField(methodHookParam.args[0], "intent") != null) {
-                                    Intent intent = (Intent) XposedHelpers.getObjectField(methodHookParam.args[0], "intent");
-                                    String target = intent.getPackage();
-                                    if (target == null && intent.getComponent() != null) {
-                                        target = intent.getComponent().getPackageName();
+                    for (Method m : clazz.getDeclaredMethods()) {
+                        String name = m.getName();
+                        if ("shouldPreventSendReceiverReal".equals(name) || "shouldPreventSendReceiver".equals(name) || "shouldPreventStartBroadcast".equals(name)) {
+                            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                                @Override
+                                protected void beforeHookedMethod(MethodHookParam methodHookParam) {
+                                    Intent intent = null;
+                                    for (Object arg : methodHookParam.args) {
+                                        if (arg instanceof Intent) {
+                                            intent = (Intent) arg;
+                                            break;
+                                        } else if (arg != null) {
+                                            try {
+                                                Object obj = XposedHelpers.getObjectField(arg, "intent");
+                                                if (obj instanceof Intent) {
+                                                    intent = (Intent) obj;
+                                                    break;
+                                                }
+                                            } catch (Throwable ignored) {}
+                                        }
                                     }
-                                    if (isFCMIntent(intent) && targetIsAllow(target)) {
-                                        methodHookParam.setResult(false);
+                                    if (intent != null && isFCMIntent(intent)) {
+                                        String target = intent.getPackage();
+                                        if (target == null && intent.getComponent() != null) {
+                                            target = intent.getComponent().getPackageName();
+                                        }
+                                        if (target == null) {
+                                            for (Object arg : methodHookParam.args) {
+                                                if (arg instanceof String && targetIsAllow((String) arg)) {
+                                                    target = (String) arg;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        if (target == null || targetIsAllow(target)) {
+                                            printLog("[AutoStartFix] ColorOS 16 bypassed receiver restriction for " + target, true);
+                                            methodHookParam.setResult(false);
+                                        }
                                     }
                                 }
-                            }
-                        });
-                        printLog("Hooked " + className + ".shouldPreventSendReceiverReal (" + method.getParameterCount() + " params)");
-                        hooked = true;
+                            });
+                            printLog("Hooked " + className + "." + name + " (" + m.getParameterCount() + " params)");
+                            hooked = true;
+                        }
                     }
-                } catch (XposedHelpers.ClassNotFoundError ignored) {}
+                } catch (Throwable ignored) {}
             }
             if (!hooked) {
-                throw new NoSuchMethodError("shouldPreventSendReceiverReal");
+                printLog("Warning: Could not hook ColorOS startup manager methods");
             }
-        } catch (XposedHelpers.ClassNotFoundError | NoSuchMethodError  e) {
-            printLog("No Such Method OplusAppStartupManager.shouldPreventSendReceiverReal");
+        } catch (Throwable e) {
+            printLog("AutoStartFix ColorOS 16 error: " + e.getMessage());
         }
     }
 
