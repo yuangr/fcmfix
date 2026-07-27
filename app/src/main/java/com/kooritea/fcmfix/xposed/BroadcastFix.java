@@ -39,12 +39,11 @@ public class BroadcastFix extends XposedModule {
 
     protected void startHookBroadcastIntentLocked(){
         Method targetMethod = null;
-        int intent_args_index = 0;
-        int appOp_args_index = 0;
+        int intent_args_index = -1;
+        int appOp_args_index = -1;
 
         // === Path 1: Android 15+ BroadcastController (API >= 35) ===
         if(Build.VERSION.SDK_INT >= 35){
-            // Try multiple class names — Google may refactor across versions
             String[] controllerClasses = {
                 "com.android.server.am.BroadcastController",
                 "com.android.server.am.BroadcastQueueModernImpl"
@@ -58,47 +57,33 @@ public class BroadcastFix extends XposedModule {
             }
             if(targetMethod != null){
                 Parameter[] parameters = targetMethod.getParameters();
-                if(Build.VERSION.SDK_INT == 35){
-                    // Android 15 known positions
-                    intent_args_index = 3;
-                    appOp_args_index = 13;
+                // Parameter name detection first
+                for(int i = 0; i < parameters.length; i++){
+                    if("appOp".equals(parameters[i].getName()) && parameters[i].getType() == int.class){
+                        appOp_args_index = i;
+                    }
+                    if("intent".equals(parameters[i].getName()) && parameters[i].getType() == Intent.class){
+                        intent_args_index = i;
+                    }
                 }
-                // Validate hardcoded indices, fallback to dynamic detection for API 36+
-                if(intent_args_index == 0 || appOp_args_index == 0 ||
-                   appOp_args_index >= parameters.length ||
-                   parameters[appOp_args_index].getType() != int.class ||
-                   (intent_args_index < parameters.length && parameters[intent_args_index].getType() != Intent.class)){
-                    intent_args_index = 0;
-                    appOp_args_index = 0;
-                    // Try by parameter name first
+                // Fallback: detect by type pattern
+                if(intent_args_index == -1){
                     for(int i = 0; i < parameters.length; i++){
-                        if("appOp".equals(parameters[i].getName()) && parameters[i].getType() == int.class){
-                            appOp_args_index = i;
-                        }
-                        if("intent".equals(parameters[i].getName()) && parameters[i].getType() == Intent.class){
+                        if(parameters[i].getType() == Intent.class){
                             intent_args_index = i;
+                            break;
                         }
                     }
-                    // Fallback: detect by type pattern
-                    if(intent_args_index == 0){
-                        for(int i = 0; i < parameters.length; i++){
-                            if(parameters[i].getType() == Intent.class){
-                                intent_args_index = i;
-                                break;
-                            }
-                        }
-                    }
-                    if(appOp_args_index == 0){
-                        // appOp is typically the last int parameter in the method signature
-                        for(int i = parameters.length - 1; i >= 0; i--){
-                            if(parameters[i].getType() == int.class){
-                                appOp_args_index = i;
-                                break;
-                            }
-                        }
-                    }
-                    printLog("[BroadcastFix] Dynamic detection result: intent_idx=" + intent_args_index + ", appOp_idx=" + appOp_args_index);
                 }
+                if(appOp_args_index == -1){
+                    for(int i = parameters.length - 1; i >= 0; i--){
+                        if(parameters[i].getType() == int.class){
+                            appOp_args_index = i;
+                            break;
+                        }
+                    }
+                }
+                printLog("[BroadcastFix] Controller detection result: intent_idx=" + intent_args_index + ", appOp_idx=" + appOp_args_index);
             } else {
                 printLog("[BroadcastFix] BroadcastController/BroadcastQueueModernImpl not found, falling back to AMS");
             }
@@ -116,46 +101,30 @@ public class BroadcastFix extends XposedModule {
                 }else if(Build.VERSION.SDK_INT == Build.VERSION_CODES.R){
                     intent_args_index = 3;
                     appOp_args_index = 10;
-                }else if(Build.VERSION.SDK_INT == 31){
+                }else if(Build.VERSION.SDK_INT == 31 || Build.VERSION.SDK_INT == 32){
                     intent_args_index = 3;
-                    if(parameters[11].getType() == int.class){
+                    if(parameters.length > 11 && parameters[11].getType() == int.class){
                         appOp_args_index = 11;
-                    }
-                    if(parameters[12].getType() == int.class){
-                        appOp_args_index = 12;
-                    }
-                }else if(Build.VERSION.SDK_INT == 32){
-                    intent_args_index = 3;
-                    if(parameters[11].getType() == int.class){
-                        appOp_args_index = 11;
-                    }
-                    if(parameters[12].getType() == int.class){
+                    } else if(parameters.length > 12 && parameters[12].getType() == int.class){
                         appOp_args_index = 12;
                     }
                 }else if(Build.VERSION.SDK_INT == 33){
                     intent_args_index = 3;
                     appOp_args_index = 12;
-                } else if(Build.VERSION.SDK_INT == 34){
+                } else if(Build.VERSION.SDK_INT >= 34){
                     intent_args_index = 3;
-                    if(parameters[12].getType() == int.class){
+                    if(parameters.length > 12 && parameters[12].getType() == int.class){
                         appOp_args_index = 12;
-                    }
-                    if(parameters[13].getType() == int.class){
-                        appOp_args_index = 13;
-                    }
-                } else if(Build.VERSION.SDK_INT >= 35){
-                    intent_args_index = 3;
-                    if(parameters[12].getType() == int.class){
-                        appOp_args_index = 12;
-                    }
-                    if(parameters[13].getType() == int.class){
+                    } else if(parameters.length > 13 && parameters[13].getType() == int.class){
                         appOp_args_index = 13;
                     }
                 }
-                if(intent_args_index == 0 || appOp_args_index == 0){
-                    intent_args_index = 0;
-                    appOp_args_index = 0;
-                    // 根据参数名称查找，部分经过混淆的系统无效
+                // Dynamic fallback if hardcoded index check didn't match
+                if(intent_args_index == -1 || appOp_args_index == -1 ||
+                   intent_args_index >= parameters.length || appOp_args_index >= parameters.length ||
+                   parameters[intent_args_index].getType() != Intent.class || parameters[appOp_args_index].getType() != int.class){
+                    intent_args_index = -1;
+                    appOp_args_index = -1;
                     for(int i = 0; i < parameters.length; i++){
                         if("appOp".equals(parameters[i].getName()) && parameters[i].getType() == int.class){
                             appOp_args_index = i;
@@ -164,21 +133,20 @@ public class BroadcastFix extends XposedModule {
                             intent_args_index = i;
                         }
                     }
-                }
-                // Final fallback: type pattern detection for AMS path too
-                if(intent_args_index == 0){
-                    for(int i = 0; i < parameters.length; i++){
-                        if(parameters[i].getType() == Intent.class){
-                            intent_args_index = i;
-                            break;
+                    if(intent_args_index == -1){
+                        for(int i = 0; i < parameters.length; i++){
+                            if(parameters[i].getType() == Intent.class){
+                                intent_args_index = i;
+                                break;
+                            }
                         }
                     }
-                }
-                if(appOp_args_index == 0){
-                    for(int i = parameters.length - 1; i >= 0; i--){
-                        if(parameters[i].getType() == int.class){
-                            appOp_args_index = i;
-                            break;
+                    if(appOp_args_index == -1){
+                        for(int i = parameters.length - 1; i >= 0; i--){
+                            if(parameters[i].getType() == int.class){
+                                appOp_args_index = i;
+                                break;
+                            }
                         }
                     }
                 }
@@ -188,11 +156,49 @@ public class BroadcastFix extends XposedModule {
             }
         }
 
-        if(targetMethod != null && intent_args_index != 0 && appOp_args_index != 0 && targetMethod.getParameters()[intent_args_index].getType() == Intent.class && targetMethod.getParameters()[appOp_args_index].getType() == int.class){
-            createBroadcastIntentLockedHooker(intent_args_index,appOp_args_index,targetMethod);
+        if(targetMethod != null && intent_args_index >= 0 && appOp_args_index >= 0 &&
+           intent_args_index < targetMethod.getParameterCount() && appOp_args_index < targetMethod.getParameterCount() &&
+           targetMethod.getParameters()[intent_args_index].getType() == Intent.class &&
+           targetMethod.getParameters()[appOp_args_index].getType() == int.class){
+            createBroadcastIntentLockedHooker(intent_args_index, appOp_args_index, targetMethod);
         } else {
             printLog("[BroadcastFix] broadcastIntentLocked hook 位置查找失败，fcmfix将不会工作。targetMethod=" + (targetMethod != null ? targetMethod.getDeclaringClass().getName() : "null") + " intent_idx=" + intent_args_index + " appOp_idx=" + appOp_args_index);
         }
+    }
+
+    private String extractTargetPackage(Intent intent, Object[] args) {
+        if (intent == null) return null;
+        if (intent.getComponent() != null && intent.getComponent().getPackageName() != null) {
+            return intent.getComponent().getPackageName();
+        }
+        if (intent.getPackage() != null) {
+            return intent.getPackage();
+        }
+        try {
+            if (intent.getExtras() != null) {
+                for (String key : intent.getExtras().keySet()) {
+                    Object val = intent.getExtras().get(key);
+                    if (val instanceof String) {
+                        String str = (String) val;
+                        if (targetIsAllow(str)) {
+                            return str;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        if (args != null) {
+            for (Object arg : args) {
+                if (arg instanceof String) {
+                    String str = (String) arg;
+                    if (targetIsAllow(str)) {
+                        return str;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     protected void createBroadcastIntentLockedHooker(int intent_args_index, int appOp_args_index, Method method){
@@ -210,31 +216,14 @@ public class BroadcastFix extends XposedModule {
                     return;
                 }
                 Intent intent = (Intent) methodHookParam.args[finalIntent_args_index];
-                // 介入条件：Intent是FCM 且 未包含唤醒停止的pkg
                 if(isFCMIntent(intent)){
-                    String target = null;
-                    if (intent.getComponent() != null) {
-                        target = intent.getComponent().getPackageName();
-                    } else if (intent.getPackage() != null) {
-                        target = intent.getPackage();
-                    } else {
-                        // Fallback: search method args for a string parameter that looks like a target package
-                        for (Object arg : methodHookParam.args) {
-                            if (arg instanceof String && ((String) arg).contains(".")) {
-                                String str = (String) arg;
-                                if (targetIsAllow(str)) {
-                                    target = str;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
+                    String target = extractTargetPackage(intent, methodHookParam.args);
                     boolean hasStoppedFlag = (intent.getFlags() & Intent.FLAG_INCLUDE_STOPPED_PACKAGES) != 0;
                     printLog("[BroadcastFix] FCM Intent intercepted: action=" + intent.getAction() + ", target=" + target + ", hasStoppedFlag=" + hasStoppedFlag);
 
                     if(!hasStoppedFlag){
-                        if(targetIsAllow(target)){
+                        // If target is in allowList OR target is null (safeguard for FCM intents), add FLAG_INCLUDE_STOPPED_PACKAGES
+                        if(target == null || targetIsAllow(target)){
                             int i = (Integer) methodHookParam.args[finalAppOp_args_index];
                             if (i == -1) {
                                 methodHookParam.args[finalAppOp_args_index] = 11;
