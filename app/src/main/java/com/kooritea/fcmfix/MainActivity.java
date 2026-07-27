@@ -208,18 +208,34 @@ public class MainActivity extends AppCompatActivity {
             List<AppInfo> _notAllowList = new ArrayList<>();
             List<AppInfo> _notFoundFcm = new ArrayList<>();
             PackageManager packageManager = getPackageManager();
-            for(PackageInfo packageInfo : packageManager.getInstalledPackages(PackageManager.GET_RECEIVERS | PackageManager.MATCH_DISABLED_COMPONENTS | PackageManager.MATCH_UNINSTALLED_PACKAGES)) {
+            for(PackageInfo packageInfo : packageManager.getInstalledPackages(PackageManager.GET_RECEIVERS | PackageManager.GET_SERVICES | PackageManager.MATCH_DISABLED_COMPONENTS | PackageManager.MATCH_UNINSTALLED_PACKAGES)) {
                 boolean flag = false;
                 AppInfo appInfo = new AppInfo(packageInfo);
                 if (packageInfo.receivers != null) {
-                    for (ActivityInfo  receiverInfo : packageInfo.receivers ){
-                        if(receiverInfo.name.equals("com.google.firebase.iid.FirebaseInstanceIdReceiver") || receiverInfo.name.equals("com.google.android.gms.measurement.AppMeasurementReceiver")){
+                    for (ActivityInfo receiverInfo : packageInfo.receivers ){
+                        if(receiverInfo.name.contains("Firebase") ||
+                           receiverInfo.name.contains("GcmReceiver") ||
+                           receiverInfo.name.equals("com.google.firebase.iid.FirebaseInstanceIdReceiver") ||
+                           receiverInfo.name.equals("com.google.android.gms.measurement.AppMeasurementReceiver") ||
+                           receiverInfo.name.endsWith(".c2dm.intent.RECEIVE")){
                             flag = true;
                             appInfo.includeFcm = true;
                             break;
                         }
                     }
-                }else{
+                }
+                if (!flag && packageInfo.services != null) {
+                    for (ActivityInfo serviceInfo : packageInfo.services) {
+                        if (serviceInfo.name.contains("Firebase") ||
+                            serviceInfo.name.contains("Fcm") ||
+                            serviceInfo.name.contains("Gcm")) {
+                            flag = true;
+                            appInfo.includeFcm = true;
+                            break;
+                        }
+                    }
+                }
+                if (packageInfo.receivers == null && packageInfo.services == null) {
                     continue;
                 }
                 if(allowListSet.contains(appInfo.packageName)){
@@ -410,11 +426,16 @@ public class MainActivity extends AppCompatActivity {
             }
             if("全选包含 FCM 的应用".equals(item.getTitle())){
                 item.setOnMenuItemClickListener(menuItem -> {
+                    boolean changed = false;
                     for(AppInfo appInfo : appListAdapter.mAppList){
-                        if(appInfo.includeFcm){
-                            addAppInAllowList(appInfo.packageName);
+                        if(appInfo.includeFcm && !appInfo.isAllow){
+                            this.allowList.add(appInfo.packageName);
                             appInfo.isAllow = true;
+                            changed = true;
                         }
+                    }
+                    if (changed) {
+                        this.updateConfig();
                     }
                     appListAdapter.notifyDataSetChanged();
                     return false;

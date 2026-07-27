@@ -22,11 +22,11 @@
   - **BroadcastFix API 36 动态参数检测**：`broadcastIntentLocked` 在 Android 16 上增加参数索引自动验证与动态探测回退，避免因方法签名变化导致核心唤醒逻辑失效。
   - **shouldPreventSendReceiverReal 多版本适配**：支持多个类名和参数数量的自动探测，确保自启动拦截绕过在 ColorOS 16 上也能正常工作。
   - **缩短启动等待时间**：将开机后的 Hook 等待时间从 60 秒缩短至 30 秒，减少启动初期 FCM 消息丢失窗口。
-- **修复 ColorOS 16 上 "Failed to broadcast to stopped app" 导致 Telegram 等应用收不到推送的问题**：
-  - **BroadcastFix 多候选类探测**：新增 `BroadcastQueueModernImpl` 作为 Android 16 上 `broadcastIntentLocked` 的候选宿主类。当 `BroadcastController` 不存在时自动降级探测，确保 `FLAG_INCLUDE_STOPPED_PACKAGES` 标志注入不会因类名变化而失效。
-  - **OplusProxyWakeLock 多类名探测**：解冻（unfreeze）功能新增 `OplusPowerWakeLock`、`OplusWakeLockProxy` 等候选类名，防止因 ColorOS 16 类名变更导致 `s_oplusProxyWakeLock` 实例永远为空、解冻功能完全失效。
-  - **AMS 路径增加类型模式回退**：`ActivityManagerService.broadcastIntentLocked` 路径也增加了基于类型模式的参数检测回退，覆盖参数名被混淆的场景。
-  - **全链路诊断日志**：所有 Hook 路径新增详细日志输出（类名、参数数量、检测结果），可通过 LSPosed 日志快速定位 Hook 失效的具体环节。
+- **修复 30 秒启动等待拦截 & 改进 FCM 应用自动识别 (v1.4)**：
+  - **彻底移除 30 秒 bootComplete 延迟**：之前 `BroadcastFix` 在系统开机/解锁后会挂起 30 秒（`if (!isBootComplete) return;`），导致在此期间所有 FCM 广播直接被跳过，无法注入 `FLAG_INCLUDE_STOPPED_PACKAGES` 标志。现在改为解锁即生效，零延迟拦截。
+  - **多线程配置加载防刷新风暴**：修复 `onUpdateConfig` 因 `HashMap` 跨线程可见性问题引发的并发日志刷屏（15ms 内重复触发 41 次配置读取）。
+  - **支持现代 FCM 应用智能识别**：改进 `AppListAdapter` 中的 FCM 组件识别逻辑，不仅识别旧版的 `FirebaseInstanceIdReceiver`，还全面支持 `FirebaseMessagingService`、`GcmReceiver`、`c2dm.intent.RECEIVE` 等现代 Firebase 组件，解决全选 FCM 应用时漏选 Telegram/Gmail/Outlook 等关键应用的问题。
+  - **批量配置更新优化**：修正在"全选包含 FCM 的应用"时在循环内重复保存并发送广播的问题，改为单次批量写入，大幅提升性能与稳定性。
 
 ### lsposed作用域
 - 在miui/hyperos上如果推送没有问题，就不需要勾选电量和性能

@@ -206,59 +206,80 @@ public class BroadcastFix extends XposedModule {
         XposedBridge.hookMethod(method,new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam methodHookParam) {
-                if(!isBootComplete){
-                    return;
-                }
                 if(methodHookParam.args[finalIntent_args_index] == null){
                     return;
                 }
                 Intent intent = (Intent) methodHookParam.args[finalIntent_args_index];
-                // 介入条件：Intent未包含唤醒停止的pkg 且 Intent是FCM
-                if((intent.getFlags() & Intent.FLAG_INCLUDE_STOPPED_PACKAGES) == 0 && isFCMIntent(intent)){
-                    String target;
+                // 介入条件：Intent是FCM 且 未包含唤醒停止的pkg
+                if(isFCMIntent(intent)){
+                    String target = null;
                     if (intent.getComponent() != null) {
                         target = intent.getComponent().getPackageName();
-                    } else {
+                    } else if (intent.getPackage() != null) {
                         target = intent.getPackage();
+                    } else {
+                        // Fallback: search method args for a string parameter that looks like a target package
+                        for (Object arg : methodHookParam.args) {
+                            if (arg instanceof String && ((String) arg).contains(".")) {
+                                String str = (String) arg;
+                                if (targetIsAllow(str)) {
+                                    target = str;
+                                    break;
+                                }
+                            }
+                        }
                     }
-                    if(targetIsAllow(target)){
-                        int i = (Integer) methodHookParam.args[finalAppOp_args_index];
-                        if (i == -1) {
-                            methodHookParam.args[finalAppOp_args_index] = 11;
-                        }
-                        intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
-                        if (getBooleanConfig("includeIceBoxDisableApp",false) && !IceboxUtils.isAppEnabled(context, target)) {
-                            printLog("Waiting for IceBox to activate the app: " + target, true);
-                            methodHookParam.setResult(false);
-                            new Thread(() -> {
-                                IceboxUtils.activeApp(context, target);
-                                for (int i1 = 0; i1 < 300; i1++) {
-                                    if (!IceboxUtils.isAppEnabled(context, target)) {
-                                        try {
-                                            Thread.sleep(100);
-                                        } catch (Throwable e) {
-                                            printLog("Send Forced Start Broadcast Error: " + target + " " + e.getMessage(), true);
+
+                    boolean hasStoppedFlag = (intent.getFlags() & Intent.FLAG_INCLUDE_STOPPED_PACKAGES) != 0;
+                    printLog("[BroadcastFix] FCM Intent intercepted: action=" + intent.getAction() + ", target=" + target + ", hasStoppedFlag=" + hasStoppedFlag);
+
+                    if(!hasStoppedFlag){
+                        if(targetIsAllow(target)){
+                            int i = (Integer) methodHookParam.args[finalAppOp_args_index];
+                            if (i == -1) {
+                                methodHookParam.args[finalAppOp_args_index] = 11;
+                            }
+                            intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+                            printLog("[BroadcastFix] Added FLAG_INCLUDE_STOPPED_PACKAGES for target=" + target, true);
+
+                            if (getBooleanConfig("includeIceBoxDisableApp",false) && target != null && !IceboxUtils.isAppEnabled(context, target)) {
+                                printLog("Waiting for IceBox to activate the app: " + target, true);
+                                methodHookParam.setResult(false);
+                                final String finalTarget = target;
+                                new Thread(() -> {
+                                    IceboxUtils.activeApp(context, finalTarget);
+                                    for (int i1 = 0; i1 < 300; i1++) {
+                                        if (!IceboxUtils.isAppEnabled(context, finalTarget)) {
+                                            try {
+                                                Thread.sleep(100);
+                                            } catch (Throwable e) {
+                                                printLog("Send Forced Start Broadcast Error: " + finalTarget + " " + e.getMessage(), true);
+                                            }
+                                        } else {
+                                            break;
                                         }
-                                    } else {
-                                        break;
                                     }
-                                }
-                                try {
-                                    if(IceboxUtils.isAppEnabled(context, target)){
-                                        printLog("Send Forced Start Broadcast: " + target, true);
-                                    }else{
-                                        printLog("Waiting for IceBox to activate the app timed out: " + target, true);
+                                    try {
+                                        if(IceboxUtils.isAppEnabled(context, finalTarget)){
+                                            printLog("Send Forced Start Broadcast: " + finalTarget, true);
+                                        }else{
+                                            printLog("Waiting for IceBox to activate the app timed out: " + finalTarget, true);
+                                        }
+                                        XposedBridge.invokeOriginalMethod(methodHookParam.method, methodHookParam.thisObject, methodHookParam.args);
+                                    } catch (Throwable e) {
+                                        printLog("Send Forced Start Broadcast Error: " + finalTarget + " " + e.getMessage(), true);
                                     }
-                                    XposedBridge.invokeOriginalMethod(methodHookParam.method, methodHookParam.thisObject, methodHookParam.args);
-                                } catch (Throwable e) {
-                                    printLog("Send Forced Start Broadcast Error: " + target + " " + e.getMessage(), true);
-                                }
-                            }).start();
-                        }else{
-                            printLog("Send Forced Start Broadcast: " + target, true);
+                                }).start();
+                            }else{
+                                printLog("Send Forced Start Broadcast: " + target, true);
+                            }
+                            // cos15/16 unfreeze
+                            if (target != null) {
+                                OplusProxyFix.unfreeze(target);
+                            }
+                        } else {
+                            printLog("[BroadcastFix] Target " + target + " is NOT in allowList (allowList size: " + (allowList != null ? allowList.size() : 0) + ")");
                         }
-                        // cos15 unfreeze
-                        OplusProxyFix.unfreeze(target);
                     }
                 }
             }

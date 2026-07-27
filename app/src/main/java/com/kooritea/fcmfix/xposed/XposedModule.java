@@ -32,7 +32,7 @@ public abstract class XposedModule {
     private static String selfPackageName = "UNKNOWN";
 
     protected final ClassLoader classLoader;
-    public static Set<String> allowList = null;
+    public static volatile Set<String> allowList = null;
     static final String TAG = "FcmFix";
     private static final HashMap<String, Object> config = new HashMap<>();
 
@@ -40,7 +40,7 @@ public abstract class XposedModule {
     protected static Context context = null;
     private static final ArrayList<XposedModule> instances = new ArrayList<>();
     private static Boolean isInitReceiver = false;
-    public static Boolean isBootComplete = false;
+    public static volatile Boolean isBootComplete = true; // Default true, no need to block for 30s
     private static Thread loadConfigThread = null;
 
     protected XposedModule(final ClassLoader classLoader) {
@@ -81,19 +81,7 @@ public abstract class XposedModule {
 
     private static void callAllOnCanReadConfig() {
         initReceiver();
-        if ("android".equals(getSelfPackageName())) {
-            new Thread(() -> {
-                try {
-                    Thread.sleep(30000);
-                    isBootComplete = true;
-                    printLog("Boot Complete");
-                } catch (Throwable e) {
-                    printLog(e.getMessage());
-                }
-            }).start();
-        } else {
-            isBootComplete = true;
-        }
+        isBootComplete = true;
         for (XposedModule instance : instances) {
             try {
                 instance.onCanReadConfig();
@@ -173,7 +161,7 @@ public abstract class XposedModule {
         return value == null ? defaultValue : (Boolean) value;
     }
 
-    protected static void onUpdateConfig() {
+    protected static synchronized void onUpdateConfig() {
         if (loadConfigThread == null) {
             loadConfigThread = new Thread() {
                 @Override
@@ -184,18 +172,24 @@ public abstract class XposedModule {
                         if (remotePreferences == null) {
                             throw new IllegalStateException("remotePreferences 不可用");
                         }
-                        allowList = remotePreferences.getStringSet("allowList", allowList == null ? new HashSet<>() : allowList);
+                        Set<String> newAllowList = remotePreferences.getStringSet("allowList", allowList == null ? new HashSet<>() : allowList);
+                        allowList = newAllowList;
                         if (allowList != null && "android".equals(getSelfPackageName())) {
                             printLog("[Modern Xposed API]onUpdateConfig allowList size: " + allowList.size());
                         }
-                        config.put("disableAutoCleanNotification", remotePreferences.getBoolean("disableAutoCleanNotification", false));
-                        config.put("includeIceBoxDisableApp", remotePreferences.getBoolean("includeIceBoxDisableApp", false));
-                        config.put("noResponseNotification", remotePreferences.getBoolean("noResponseNotification", false));
-                        config.put("init", true);
+                        synchronized (config) {
+                            config.put("disableAutoCleanNotification", remotePreferences.getBoolean("disableAutoCleanNotification", false));
+                            config.put("includeIceBoxDisableApp", remotePreferences.getBoolean("includeIceBoxDisableApp", false));
+                            config.put("noResponseNotification", remotePreferences.getBoolean("noResponseNotification", false));
+                            config.put("init", true);
+                        }
                     } catch (Throwable e) {
                         printLog("通过现代Xposed API读取配置失败: " + e.getMessage());
+                    } finally {
+                        synchronized (XposedModule.class) {
+                            loadConfigThread = null;
+                        }
                     }
-                    loadConfigThread = null;
                 }
             };
             loadConfigThread.start();
