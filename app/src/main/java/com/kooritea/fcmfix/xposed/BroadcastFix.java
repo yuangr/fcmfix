@@ -41,8 +41,21 @@ public class BroadcastFix extends XposedModule {
         Method targetMethod = null;
         int intent_args_index = 0;
         int appOp_args_index = 0;
+
+        // === Path 1: Android 15+ BroadcastController (API >= 35) ===
         if(Build.VERSION.SDK_INT >= 35){
-            targetMethod = XposedUtils.tryFindMethodMostParam(classLoader,"com.android.server.am.BroadcastController","broadcastIntentLocked");
+            // Try multiple class names — Google may refactor across versions
+            String[] controllerClasses = {
+                "com.android.server.am.BroadcastController",
+                "com.android.server.am.BroadcastQueueModernImpl"
+            };
+            for (String className : controllerClasses) {
+                targetMethod = XposedUtils.tryFindMethodMostParam(classLoader, className, "broadcastIntentLocked");
+                if (targetMethod != null) {
+                    printLog("[BroadcastFix] Found method in " + className + " with " + targetMethod.getParameterCount() + " params");
+                    break;
+                }
+            }
             if(targetMethod != null){
                 Parameter[] parameters = targetMethod.getParameters();
                 if(Build.VERSION.SDK_INT == 35){
@@ -84,12 +97,18 @@ public class BroadcastFix extends XposedModule {
                             }
                         }
                     }
+                    printLog("[BroadcastFix] Dynamic detection result: intent_idx=" + intent_args_index + ", appOp_idx=" + appOp_args_index);
                 }
+            } else {
+                printLog("[BroadcastFix] BroadcastController/BroadcastQueueModernImpl not found, falling back to AMS");
             }
         }
+
+        // === Path 2: Fallback to ActivityManagerService (API 29-34, or API 35+ if Path 1 failed) ===
         if(targetMethod == null){
             targetMethod = XposedUtils.tryFindMethodMostParam(classLoader,"com.android.server.am.ActivityManagerService","broadcastIntentLocked");
             if(targetMethod != null){
+                printLog("[BroadcastFix] Found method in ActivityManagerService with " + targetMethod.getParameterCount() + " params");
                 Parameter[] parameters = targetMethod.getParameters();
                 if(Build.VERSION.SDK_INT == Build.VERSION_CODES.Q){
                     intent_args_index = 2;
@@ -146,12 +165,33 @@ public class BroadcastFix extends XposedModule {
                         }
                     }
                 }
+                // Final fallback: type pattern detection for AMS path too
+                if(intent_args_index == 0){
+                    for(int i = 0; i < parameters.length; i++){
+                        if(parameters[i].getType() == Intent.class){
+                            intent_args_index = i;
+                            break;
+                        }
+                    }
+                }
+                if(appOp_args_index == 0){
+                    for(int i = parameters.length - 1; i >= 0; i--){
+                        if(parameters[i].getType() == int.class){
+                            appOp_args_index = i;
+                            break;
+                        }
+                    }
+                }
+                printLog("[BroadcastFix] AMS detection result: intent_idx=" + intent_args_index + ", appOp_idx=" + appOp_args_index);
+            } else {
+                printLog("[BroadcastFix] ActivityManagerService.broadcastIntentLocked not found either!");
             }
         }
-        if(targetMethod != null && intent_args_index != 0 & appOp_args_index != 0 && targetMethod.getParameters()[intent_args_index].getType() == Intent.class && targetMethod.getParameters()[appOp_args_index].getType() == int.class){
+
+        if(targetMethod != null && intent_args_index != 0 && appOp_args_index != 0 && targetMethod.getParameters()[intent_args_index].getType() == Intent.class && targetMethod.getParameters()[appOp_args_index].getType() == int.class){
             createBroadcastIntentLockedHooker(intent_args_index,appOp_args_index,targetMethod);
         } else {
-            printLog("broadcastIntentLocked hook 位置查找失败，fcmfix将不会工作。");
+            printLog("[BroadcastFix] broadcastIntentLocked hook 位置查找失败，fcmfix将不会工作。targetMethod=" + (targetMethod != null ? targetMethod.getDeclaringClass().getName() : "null") + " intent_idx=" + intent_args_index + " appOp_idx=" + appOp_args_index);
         }
     }
 

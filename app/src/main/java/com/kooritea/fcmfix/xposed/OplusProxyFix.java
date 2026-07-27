@@ -106,19 +106,32 @@ public class OplusProxyFix extends XposedModule {
         }
     }
 
-    private void startHookOplusProxyWakeLock() throws Exception {
-        Class<?> oplusWakelockClass = XposedHelpers.findClass("com.android.server.power.OplusProxyWakeLock", classLoader);
-
-        XposedUtils.findAndHookConstructorAnyParam(oplusWakelockClass, new XC_MethodHook() {
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                if (s_oplusProxyWakeLock != null) {
-                    printLog("warn: OplusProxyWakeLock constructed multiple times!");
-                    return;
-                }
-                s_oplusProxyWakeLock = param.thisObject;
-            }
-        });
+    private void startHookOplusProxyWakeLock() {
+        // Try multiple class names for ColorOS 15/16 compatibility
+        String[] classNames = {
+            "com.android.server.power.OplusProxyWakeLock",
+            "com.android.server.power.OplusPowerWakeLock",
+            "com.android.server.power.OplusWakeLockProxy"
+        };
+        for (String className : classNames) {
+            try {
+                Class<?> oplusWakelockClass = XposedHelpers.findClass(className, classLoader);
+                XposedUtils.findAndHookConstructorAnyParam(oplusWakelockClass, new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        if (s_oplusProxyWakeLock != null) {
+                            printLog("warn: OplusProxyWakeLock constructed multiple times!");
+                            return;
+                        }
+                        s_oplusProxyWakeLock = param.thisObject;
+                        printLog("OplusProxyWakeLock instance captured from " + param.thisObject.getClass().getName());
+                    }
+                });
+                printLog("Hooked " + className + " constructor for unfreeze");
+                return;
+            } catch (Throwable ignored) {}
+        }
+        printLog("[OplusProxyFix] Failed to hook OplusProxyWakeLock: no matching class found, unfreeze will not work!");
     }
 
     private static int getTargetUidFromPackageName(String packageName) {
