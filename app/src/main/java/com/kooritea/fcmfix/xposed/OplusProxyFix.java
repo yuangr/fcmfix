@@ -1,12 +1,16 @@
 package com.kooritea.fcmfix.xposed;
 
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.WorkSource;
 
 import com.kooritea.fcmfix.util.XposedUtils;
 
+import java.lang.reflect.Method;
+
 import com.kooritea.fcmfix.libxposed.XC_MethodHook;
 import com.kooritea.fcmfix.libxposed.XC_MethodReplacement;
+import com.kooritea.fcmfix.libxposed.XposedBridge;
 import com.kooritea.fcmfix.libxposed.XposedHelpers;
 
 public class OplusProxyFix extends XposedModule {
@@ -47,38 +51,59 @@ public class OplusProxyFix extends XposedModule {
         */
     }
 
-    private void startHookOplusProxyBroadcast() throws Exception {
-        Class<?> oplusProxyBroadcastClass = XposedHelpers.findClass("com.android.server.am.OplusProxyBroadcast", classLoader);
-        Class<?> resultEnum = XposedHelpers.findClass("com.android.server.am.OplusProxyBroadcast$RESULT", classLoader);
-        Object notIncludeValue = XposedHelpers.getStaticObjectField(resultEnum, "NOT_INCLUDE");
-        Object proxyValue = XposedHelpers.getStaticObjectField(resultEnum, "PROXY");
+    private void startHookOplusProxyBroadcast() {
+        try {
+            Class<?> oplusProxyBroadcastClass = XposedHelpers.findClass("com.android.server.am.OplusProxyBroadcast", classLoader);
+            Class<?> resultEnum = XposedHelpers.findClass("com.android.server.am.OplusProxyBroadcast$RESULT", classLoader);
+            Object notIncludeValue = XposedHelpers.getStaticObjectField(resultEnum, "NOT_INCLUDE");
 
-        /*
-        XXX only tested on OnePlus13T ColorOS 15
-        private RESULT shouldProxy( 8 args
-            00 Intent intent,
-            01 int callingPid,
-            02 int callingUid,
-            03 String callingPkg,
-            04 int uid,
-            05 String pkgName,
-            06 String action,
-            07 int appType) {
-         */
-
-        XposedUtils.findAndHookMethod(oplusProxyBroadcastClass, "shouldProxy", 8, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                String callingPkg = (String)param.args[3];
-                String pkgName = (String)param.args[5];
-                String action = (String)param.args[6];
-                // positive sample: caller=com.google.android.gms, action=com.google.android.c2dm.intent.RECEIVE
-                if (isFCMAction(action) && targetIsAllow(pkgName)) {
-                    printLog("shouldProxy: bypass pkg="+pkgName+", caller="+callingPkg+", action="+action);
-                    param.setResult(notIncludeValue);
-                }
+            // Dynamically find shouldProxy method instead of hardcoding param count (COS15=8, COS16 may differ)
+            Method targetMethod = XposedUtils.tryFindMethodMostParam(oplusProxyBroadcastClass, "shouldProxy");
+            if (targetMethod == null) {
+                printLog("shouldProxy method not found in OplusProxyBroadcast");
+                return;
             }
-        });
+            printLog("Hooked OplusProxyBroadcast.shouldProxy with " + targetMethod.getParameterCount() + " params");
+
+            XposedBridge.hookMethod(targetMethod, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    String action = null;
+                    String pkgName = null;
+
+                    // Extract from Intent parameter (most reliable, version-independent)
+                    for (Object arg : param.args) {
+                        if (arg instanceof Intent) {
+                            Intent intent = (Intent) arg;
+                            action = intent.getAction();
+                            if (intent.getComponent() != null) {
+                                pkgName = intent.getComponent().getPackageName();
+                            } else {
+                                pkgName = intent.getPackage();
+                            }
+                            break;
+                        }
+                    }
+
+                    // Fallback: search String parameters for FCM action
+                    if (action == null) {
+                        for (Object arg : param.args) {
+                            if (arg instanceof String && isFCMAction((String) arg)) {
+                                action = (String) arg;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (isFCMAction(action) && targetIsAllow(pkgName)) {
+                        printLog("shouldProxy: bypass pkg=" + pkgName + ", action=" + action);
+                        param.setResult(notIncludeValue);
+                    }
+                }
+            });
+        } catch (Throwable e) {
+            printLog("hook error OplusProxyBroadcast.shouldProxy: " + e.getMessage());
+        }
     }
 
     private void startHookOplusProxyWakeLock() throws Exception {
@@ -159,15 +184,52 @@ public class OplusProxyFix extends XposedModule {
     }
 
     private void startHookRegisterGmsRestrictObserver() {
-        XposedHelpers.findAndHookMethod("com.android.server.hans.scene.OplusBgSceneManager", classLoader, "registerGmsRestrictObserver", XC_MethodReplacement.DO_NOTHING);
+        // Try multiple class names for ColorOS 15/16 compatibility
+        String[] classNames = {
+            "com.android.server.hans.scene.OplusBgSceneManager",
+            "com.android.server.hans.OplusBgSceneManager",
+            "com.android.server.hans.scene.OplusHansSceneManager"
+        };
+        for (String className : classNames) {
+            try {
+                XposedHelpers.findAndHookMethod(className, classLoader, "registerGmsRestrictObserver", XC_MethodReplacement.DO_NOTHING);
+                printLog("Hooked " + className + ".registerGmsRestrictObserver");
+                return;
+            } catch (Throwable ignored) {}
+        }
+        printLog("Failed to hook registerGmsRestrictObserver: no matching class found");
     }
 
     private void startHookUpdateGmsRestrict() {
-        XposedHelpers.findAndHookMethod("com.android.server.hans.scene.OplusBgSceneManager", classLoader, "updateGmsRestrict", XC_MethodReplacement.DO_NOTHING);
+        String[] classNames = {
+            "com.android.server.hans.scene.OplusBgSceneManager",
+            "com.android.server.hans.OplusBgSceneManager",
+            "com.android.server.hans.scene.OplusHansSceneManager"
+        };
+        for (String className : classNames) {
+            try {
+                XposedHelpers.findAndHookMethod(className, classLoader, "updateGmsRestrict", XC_MethodReplacement.DO_NOTHING);
+                printLog("Hooked " + className + ".updateGmsRestrict");
+                return;
+            } catch (Throwable ignored) {}
+        }
+        printLog("Failed to hook updateGmsRestrict: no matching class found");
     }
 
     private void startHookIsGoogleRestricInfoOn() {
-        XposedHelpers.findAndHookMethod("com.android.server.am.OplusAppStartupManager$OplusStartupStrategy", classLoader, "isGoogleRestricInfoOn", int.class, XC_MethodReplacement.returnConstant(false));
+        String[] classNames = {
+            "com.android.server.am.OplusAppStartupManager$OplusStartupStrategy",
+            "com.android.server.am.OplusAppStartupManagerService$OplusStartupStrategy",
+            "com.android.server.am.OplusAppStartupManager$StartupStrategy"
+        };
+        for (String className : classNames) {
+            try {
+                XposedHelpers.findAndHookMethod(className, classLoader, "isGoogleRestricInfoOn", int.class, XC_MethodReplacement.returnConstant(false));
+                printLog("Hooked " + className + ".isGoogleRestricInfoOn");
+                return;
+            } catch (Throwable ignored) {}
+        }
+        printLog("Failed to hook isGoogleRestricInfoOn: no matching class found");
     }
 
     private void startHookIsGmsApp() {

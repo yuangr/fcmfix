@@ -44,9 +44,46 @@ public class BroadcastFix extends XposedModule {
         if(Build.VERSION.SDK_INT >= 35){
             targetMethod = XposedUtils.tryFindMethodMostParam(classLoader,"com.android.server.am.BroadcastController","broadcastIntentLocked");
             if(targetMethod != null){
-                if(Build.VERSION.SDK_INT >= 35){
+                Parameter[] parameters = targetMethod.getParameters();
+                if(Build.VERSION.SDK_INT == 35){
+                    // Android 15 known positions
                     intent_args_index = 3;
                     appOp_args_index = 13;
+                }
+                // Validate hardcoded indices, fallback to dynamic detection for API 36+
+                if(intent_args_index == 0 || appOp_args_index == 0 ||
+                   appOp_args_index >= parameters.length ||
+                   parameters[appOp_args_index].getType() != int.class ||
+                   (intent_args_index < parameters.length && parameters[intent_args_index].getType() != Intent.class)){
+                    intent_args_index = 0;
+                    appOp_args_index = 0;
+                    // Try by parameter name first
+                    for(int i = 0; i < parameters.length; i++){
+                        if("appOp".equals(parameters[i].getName()) && parameters[i].getType() == int.class){
+                            appOp_args_index = i;
+                        }
+                        if("intent".equals(parameters[i].getName()) && parameters[i].getType() == Intent.class){
+                            intent_args_index = i;
+                        }
+                    }
+                    // Fallback: detect by type pattern
+                    if(intent_args_index == 0){
+                        for(int i = 0; i < parameters.length; i++){
+                            if(parameters[i].getType() == Intent.class){
+                                intent_args_index = i;
+                                break;
+                            }
+                        }
+                    }
+                    if(appOp_args_index == 0){
+                        // appOp is typically the last int parameter in the method signature
+                        for(int i = parameters.length - 1; i >= 0; i--){
+                            if(parameters[i].getType() == int.class){
+                                appOp_args_index = i;
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }

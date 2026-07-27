@@ -16,6 +16,12 @@
 - **修复 ColorOS 16 等系统下更新配置闪退问题**：优化了配置初始化与读取机制，将强制读取 JSON 属性替换为安全的 `optBoolean` 缺省读取模式，并在生命周期入口补充默认值注入，彻底解决启动或重建时因 Xposed 服务连接延迟出现 `JSONException: No value for disableAutoCleanNotification` 的闪退报错。
 - **修复重启应用后已勾选应用状态显示为“未选中”的 Bug**：优化了 XposedService 异步状态绑定逻辑，设计并实现了 `updateAllowList` 数据源深度刷新机制，彻底解决因服务异步加载与界面构建顺序竞态导致的已勾选状态在重新打开时丢失的显示异常。
 - **修复 OxygenOS 等系统上重启 App 勾选状态无法恢复的问题**：引入本地 SharedPreferences 缓存机制作为配置加载兜底方案。每次保存配置时同时写入本地缓存，App 启动时优先从本地缓存即时恢复勾选状态，不再完全依赖 LSPosed 远程服务的异步绑定，彻底解决因远程服务绑定慢或不可用导致的 UI 状态丢失问题。
+- **修复 ColorOS 16 上 FCM 消息经常无法送达的问题**：
+  - **OplusProxyBroadcast 动态适配**：将 `shouldProxy` Hook 从硬编码 8 参数改为动态方法发现 + 从 Intent 对象提取参数，兼容 ColorOS 16 方法签名变更。
+  - **Hans GMS 限制 Hook 多版本探测**：`registerGmsRestrictObserver`、`updateGmsRestrict`、`isGoogleRestricInfoOn` 现在会探测多个可能的类名，防止 ColorOS 16 类名重构导致 Hook 静默失败。
+  - **BroadcastFix API 36 动态参数检测**：`broadcastIntentLocked` 在 Android 16 上增加参数索引自动验证与动态探测回退，避免因方法签名变化导致核心唤醒逻辑失效。
+  - **shouldPreventSendReceiverReal 多版本适配**：支持多个类名和参数数量的自动探测，确保自启动拦截绕过在 ColorOS 16 上也能正常工作。
+  - **缩短启动等待时间**：将开机后的 Hook 等待时间从 60 秒缩短至 30 秒，减少启动初期 FCM 消息丢失窗口。
 
 ### lsposed作用域
 - 在miui/hyperos上如果推送没有问题，就不需要勾选电量和性能

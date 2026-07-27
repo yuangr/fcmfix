@@ -160,21 +160,56 @@ public class AutoStartFix extends XposedModule {
         }
 
         try{
-            // oos15/cos15
-            Method method = XposedUtils.findMethod(XposedHelpers.findClass("com.android.server.am.OplusAppStartupManager",classLoader),"shouldPreventSendReceiverReal",4);
-            XposedBridge.hookMethod(method,new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam methodHookParam) {
-                    if(methodHookParam.args[0] != null && XposedHelpers.getObjectField(methodHookParam.args[0],"intent") != null){
-                        Intent intent = (Intent)XposedHelpers.getObjectField(methodHookParam.args[0],"intent");
-                        if(isFCMIntent(intent) && targetIsAllow(intent.getPackage())){
-                            methodHookParam.setResult(false);
+            // oos15/cos15/cos16 — try multiple class names and param counts
+            String[] classNames = {
+                "com.android.server.am.OplusAppStartupManager",
+                "com.android.server.am.OplusAppStartupManagerService"
+            };
+            boolean hooked = false;
+            for (String className : classNames) {
+                if (hooked) break;
+                try {
+                    Class<?> clazz = XposedHelpers.findClass(className, classLoader);
+                    // Try param counts 4 and 5 (may vary across COS versions)
+                    Method method = XposedUtils.findMethod(clazz, "shouldPreventSendReceiverReal", 4);
+                    if (method == null) {
+                        method = XposedUtils.findMethod(clazz, "shouldPreventSendReceiverReal", 5);
+                    }
+                    if (method == null) {
+                        // Last resort: find any method with this name
+                        for (Method m : clazz.getDeclaredMethods()) {
+                            if ("shouldPreventSendReceiverReal".equals(m.getName())) {
+                                method = m;
+                                break;
+                            }
                         }
                     }
-                }
-            });
+                    if (method != null) {
+                        XposedBridge.hookMethod(method, new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam methodHookParam) {
+                                if (methodHookParam.args[0] != null && XposedHelpers.getObjectField(methodHookParam.args[0], "intent") != null) {
+                                    Intent intent = (Intent) XposedHelpers.getObjectField(methodHookParam.args[0], "intent");
+                                    String target = intent.getPackage();
+                                    if (target == null && intent.getComponent() != null) {
+                                        target = intent.getComponent().getPackageName();
+                                    }
+                                    if (isFCMIntent(intent) && targetIsAllow(target)) {
+                                        methodHookParam.setResult(false);
+                                    }
+                                }
+                            }
+                        });
+                        printLog("Hooked " + className + ".shouldPreventSendReceiverReal (" + method.getParameterCount() + " params)");
+                        hooked = true;
+                    }
+                } catch (XposedHelpers.ClassNotFoundError ignored) {}
+            }
+            if (!hooked) {
+                throw new NoSuchMethodError("shouldPreventSendReceiverReal");
+            }
         } catch (XposedHelpers.ClassNotFoundError | NoSuchMethodError  e) {
-            printLog("No Such Method com.android.server.am.OplusAppStartupManager.shouldPreventSendReceiverReal");
+            printLog("No Such Method OplusAppStartupManager.shouldPreventSendReceiverReal");
         }
     }
 

@@ -84,7 +84,7 @@ public abstract class XposedModule {
         if ("android".equals(getSelfPackageName())) {
             new Thread(() -> {
                 try {
-                    Thread.sleep(60000);
+                    Thread.sleep(30000);
                     isBootComplete = true;
                     printLog("Boot Complete");
                 } catch (Throwable e) {
