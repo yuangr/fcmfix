@@ -20,8 +20,14 @@ import com.kooritea.fcmfix.libxposed.XposedHelpers;
 
 import com.kooritea.fcmfix.util.IceboxUtils;
 import com.kooritea.fcmfix.util.XposedUtils;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class BroadcastFix extends XposedModule {
+    private static final ExecutorService iceboxExecutor = Executors.newCachedThreadPool();
+    private static final ConcurrentHashMap<String, AtomicBoolean> iceboxUnfreezeTasks = new ConcurrentHashMap<>();
 
     public BroadcastFix(ClassLoader classLoader) {
         super(classLoader);
@@ -35,6 +41,11 @@ public class BroadcastFix extends XposedModule {
 //        }catch (Throwable e) {
 //            printLog("hook error com.android.server.am.BroadcastQueueModernImpl.scheduleResultTo:" + e.getMessage());
 //        }
+        try{
+            this.startHookBroadcastSkipPolicy();
+        }catch (Throwable e) {
+            printLog("hook error BroadcastSkipPolicy:" + e.getMessage());
+        }
     }
 
     protected void startHookBroadcastIntentLocked(){
@@ -174,30 +185,6 @@ public class BroadcastFix extends XposedModule {
         if (intent.getPackage() != null) {
             return intent.getPackage();
         }
-        try {
-            if (intent.getExtras() != null) {
-                for (String key : intent.getExtras().keySet()) {
-                    Object val = intent.getExtras().get(key);
-                    if (val instanceof String) {
-                        String str = (String) val;
-                        if (targetIsAllow(str)) {
-                            return str;
-                        }
-                    }
-                }
-            }
-        } catch (Throwable ignored) {}
-
-        if (args != null) {
-            for (Object arg : args) {
-                if (arg instanceof String) {
-                    String str = (String) arg;
-                    if (targetIsAllow(str)) {
-                        return str;
-                    }
-                }
-            }
-        }
         return null;
     }
 
@@ -235,30 +222,35 @@ public class BroadcastFix extends XposedModule {
                                 printLog("Waiting for IceBox to activate the app: " + target, true);
                                 methodHookParam.setResult(false);
                                 final String finalTarget = target;
-                                new Thread(() -> {
-                                    IceboxUtils.activeApp(context, finalTarget);
-                                    for (int i1 = 0; i1 < 300; i1++) {
-                                        if (!IceboxUtils.isAppEnabled(context, finalTarget)) {
-                                            try {
-                                                Thread.sleep(100);
-                                            } catch (Throwable e) {
-                                                printLog("Send Forced Start Broadcast Error: " + finalTarget + " " + e.getMessage(), true);
+                                AtomicBoolean isUnfreezing = iceboxUnfreezeTasks.computeIfAbsent(finalTarget, k -> new AtomicBoolean(false));
+                                if (isUnfreezing.compareAndSet(false, true)) {
+                                    iceboxExecutor.submit(() -> {
+                                        try {
+                                            IceboxUtils.activeApp(context, finalTarget);
+                                            for (int i1 = 0; i1 < 300; i1++) {
+                                                if (!IceboxUtils.isAppEnabled(context, finalTarget)) {
+                                                    try {
+                                                        Thread.sleep(100);
+                                                    } catch (Throwable e) {
+                                                        printLog("Send Forced Start Broadcast Error: " + finalTarget + " " + e.getMessage(), true);
+                                                    }
+                                                } else {
+                                                    break;
+                                                }
                                             }
-                                        } else {
-                                            break;
+                                            if(IceboxUtils.isAppEnabled(context, finalTarget)){
+                                                printLog("Send Forced Start Broadcast: " + finalTarget, true);
+                                            }else{
+                                                printLog("Waiting for IceBox to activate the app timed out: " + finalTarget, true);
+                                            }
+                                            XposedBridge.invokeOriginalMethod(methodHookParam.method, methodHookParam.thisObject, methodHookParam.args);
+                                        } catch (Throwable e) {
+                                            printLog("Send Forced Start Broadcast Error: " + finalTarget + " " + e.getMessage(), true);
+                                        } finally {
+                                            isUnfreezing.set(false);
                                         }
-                                    }
-                                    try {
-                                        if(IceboxUtils.isAppEnabled(context, finalTarget)){
-                                            printLog("Send Forced Start Broadcast: " + finalTarget, true);
-                                        }else{
-                                            printLog("Waiting for IceBox to activate the app timed out: " + finalTarget, true);
-                                        }
-                                        XposedBridge.invokeOriginalMethod(methodHookParam.method, methodHookParam.thisObject, methodHookParam.args);
-                                    } catch (Throwable e) {
-                                        printLog("Send Forced Start Broadcast Error: " + finalTarget + " " + e.getMessage(), true);
-                                    }
-                                }).start();
+                                    });
+                                }
                             }else{
                                 printLog("Send Forced Start Broadcast: " + target, true);
                             }
@@ -317,6 +309,57 @@ public class BroadcastFix extends XposedModule {
                 }
             }
         });
+    }
+
+    protected void startHookBroadcastSkipPolicy() {
+        try {
+            Class<?> policyClass = XposedHelpers.findClassIfExists("com.android.server.am.BroadcastSkipPolicy", classLoader);
+            if (policyClass != null) {
+                for (Method m : policyClass.getDeclaredMethods()) {
+                    if ("shouldSkipMessage".equals(m.getName()) || "shouldSkip".equals(m.getName())) {
+                        XposedBridge.hookMethod(m, new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam param) {
+                                Intent intent = null;
+                                for (Object arg : param.args) {
+                                    if (arg instanceof Intent) {
+                                        intent = (Intent) arg;
+                                        break;
+                                    } else if (arg != null) {
+                                        try {
+                                            Object obj = XposedHelpers.getObjectField(arg, "intent");
+                                            if (obj instanceof Intent) {
+                                                intent = (Intent) obj;
+                                                break;
+                                            }
+                                        } catch (Throwable ignored) {}
+                                    }
+                                }
+                                if (intent != null && isFCMIntent(intent)) {
+                                    String target = extractTargetPackage(intent, param.args);
+                                    if (target == null || targetIsAllow(target)) {
+                                        printLog("[BroadcastFix] BroadcastSkipPolicy bypassed for " + target, true);
+                                        intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+                                        if (target != null) {
+                                            OplusProxyFix.unfreeze(target);
+                                        }
+                                        // Check return type, it might be String (skip reason) or boolean (should skip)
+                                        if (m.getReturnType() == boolean.class) {
+                                            param.setResult(false);
+                                        } else if (m.getReturnType() == String.class) {
+                                            param.setResult(null); // null means don't skip
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                        printLog("[BroadcastFix] Hooked BroadcastSkipPolicy." + m.getName());
+                    }
+                }
+            }
+        } catch (Throwable e) {
+            printLog("hook error BroadcastSkipPolicy: " + e.getMessage());
+        }
     }
 
     private static Bitmap getAppIcon(String packageName) {

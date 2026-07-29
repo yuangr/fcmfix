@@ -38,9 +38,8 @@ public class PowerkeeperFix extends XposedModule {
             Class<?> MilletPolicy = XposedHelpers.findClassIfExists("com.miui.powerkeeper.millet.MilletPolicy", classLoader);
 
             XC_MethodHook methodHook = new XC_MethodHook() {
-                protected void beforeHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
+                protected void afterHookedMethod(XC_MethodHook.MethodHookParam methodHookParam) throws Throwable {
                     Field[] declaredFields = null;
-                    super.afterHookedMethod(methodHookParam);
                     boolean mSystemBlackList = false;
                     boolean whiteApps = false;
                     boolean mDataWhiteList = false;
@@ -57,27 +56,40 @@ public class PowerkeeperFix extends XposedModule {
 
                     if (mSystemBlackList) {
                         List blackList = (List) XposedHelpers.getObjectField(methodHookParam.thisObject, "mSystemBlackList");
-                        blackList.remove("com.google.android.gms");
-                        XposedHelpers.setObjectField(methodHookParam.thisObject, "mSystemBlackList", blackList);
-                        printLog("Success: MilletPolicy mSystemBlackList.");
+                        if (blackList != null) {
+                            synchronized (blackList) {
+                                blackList.remove("com.google.android.gms");
+                            }
+                            XposedHelpers.setObjectField(methodHookParam.thisObject, "mSystemBlackList", blackList);
+                            printLog("Success: MilletPolicy mSystemBlackList.");
+                        }
                     } else {
                         printLog("Error: MilletPolicy. Field not found: com.miui.powerkeeper.millet.MilletPolicy.mSystemBlackList");
                     }
                     if (whiteApps) {
                         List whiteAppList = (List) XposedHelpers.getObjectField(methodHookParam.thisObject, "whiteApps");
-                        whiteAppList.remove("com.google.android.gms");
-                        whiteAppList.remove("com.google.android.ext.services");
-                        XposedHelpers.setObjectField(methodHookParam.thisObject, "whiteApps", whiteAppList);
-                        printLog("Success: MilletPolicy whiteApps.");
+                        if (whiteAppList != null) {
+                            synchronized (whiteAppList) {
+                                whiteAppList.remove("com.google.android.gms");
+                                whiteAppList.remove("com.google.android.ext.services");
+                            }
+                            XposedHelpers.setObjectField(methodHookParam.thisObject, "whiteApps", whiteAppList);
+                            printLog("Success: MilletPolicy whiteApps.");
+                        }
                     } else {
                         printLog("Error: MilletPolicy. Field not found: com.miui.powerkeeper.millet.MilletPolicy.whiteApps");
                     }
                     if (mDataWhiteList) {
                         List dataWhiteList = (List) XposedHelpers.getObjectField(methodHookParam.thisObject, "mDataWhiteList");
-                        dataWhiteList.add("com.google.android.gms");
-
-                        XposedHelpers.setObjectField(methodHookParam.thisObject, "mDataWhiteList", dataWhiteList);
-                        printLog("Success: MilletPolicy mDataWhiteList.");
+                        if (dataWhiteList != null) {
+                            synchronized (dataWhiteList) {
+                                if (!dataWhiteList.contains("com.google.android.gms")) {
+                                    dataWhiteList.add("com.google.android.gms");
+                                }
+                            }
+                            XposedHelpers.setObjectField(methodHookParam.thisObject, "mDataWhiteList", dataWhiteList);
+                            printLog("Success: MilletPolicy mDataWhiteList.");
+                        }
                     }
 
                 }

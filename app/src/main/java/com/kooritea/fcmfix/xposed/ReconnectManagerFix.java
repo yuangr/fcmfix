@@ -31,14 +31,15 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import com.kooritea.fcmfix.libxposed.XC_MethodHook;
 import com.kooritea.fcmfix.libxposed.XposedBridge;
 import com.kooritea.fcmfix.libxposed.XposedHelpers;
 
-
 public class ReconnectManagerFix extends XposedModule {
+    private static final ScheduledExecutorService reconnectExecutor = Executors.newSingleThreadScheduledExecutor();
 
     private Class<?> GcmChimeraService;
     private String GcmChimeraServiceLogMethodName;
@@ -80,9 +81,9 @@ public class ReconnectManagerFix extends XposedModule {
                     IntentFilter intentFilter = new IntentFilter();
                     intentFilter.addAction("com.kooritea.fcmfix.log");
                     if (Build.VERSION.SDK_INT >= 34) {
-                        context.registerReceiver(logBroadcastReceive, intentFilter, Context.RECEIVER_EXPORTED);
+                        context.registerReceiver(logBroadcastReceive, intentFilter, "com.kooritea.fcmfix.permission.BROADCAST", null, Context.RECEIVER_EXPORTED);
                     } else {
-                        context.registerReceiver(logBroadcastReceive, intentFilter);
+                        context.registerReceiver(logBroadcastReceive, intentFilter, "com.kooritea.fcmfix.permission.BROADCAST", null);
                     }
                     if(startHookFlag){
                         checkVersion();
@@ -201,19 +202,18 @@ public class ReconnectManagerFix extends XposedModule {
                             }
                         }
                     }
-                    final Timer timer = new Timer("ReconnectManagerFix");
                     final Field finalMaxField = maxField;
-                    timer.schedule(new TimerTask() {
-                        @Override
-                        public void run() {
+                    reconnectExecutor.schedule(() -> {
+                        try {
                             long nextConnectionTime = XposedHelpers.getLongField(param.thisObject, finalMaxField.getName());
                             if (nextConnectionTime != 0 && nextConnectionTime - SystemClock.elapsedRealtime() < -60000) {
                                 context.sendBroadcast(new Intent("com.google.android.intent.action.GCM_RECONNECT"));
                                 printLog("Send broadcast GCM_RECONNECT", true);
                             }
-                            timer.cancel();
+                        } catch (Throwable e) {
+                            printLog("Error in reconnect timer: " + e.getMessage());
                         }
-                    }, (long) param.args[0] + 5000);
+                    }, (long) param.args[0] + 5000, TimeUnit.MILLISECONDS);
                 }
             }
         });

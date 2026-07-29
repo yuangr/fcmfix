@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 
 import io.github.libxposed.api.XposedInterface;
@@ -44,7 +45,7 @@ public final class XposedBridge {
             throw new IllegalArgumentException("Only Method/Constructor can be hooked");
         }
 
-        HOOKS.computeIfAbsent(member, k -> new ArrayList<>()).add(callback);
+        HOOKS.computeIfAbsent(member, k -> new CopyOnWriteArrayList<>()).add(callback);
 
         XposedInterface.HookHandle handle = xposedInterface.hook((java.lang.reflect.Executable) member)
                 .intercept(chain -> {

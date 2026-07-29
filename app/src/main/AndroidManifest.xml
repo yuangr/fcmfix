@@ -10,6 +10,12 @@
     <uses-permission android:name="com.catchingnow.icebox.SDK" />
     <uses-permission android:name="web1n.stopapp.permission.disable_api" />
 
+    <!-- Define a custom signature permission to protect internal broadcasts -->
+    <permission
+        android:name="com.kooritea.fcmfix.permission.BROADCAST"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.kooritea.fcmfix.permission.BROADCAST" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

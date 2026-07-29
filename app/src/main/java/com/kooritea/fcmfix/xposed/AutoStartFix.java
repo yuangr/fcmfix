@@ -13,6 +13,23 @@ import com.kooritea.fcmfix.libxposed.XposedHelpers;
 public class AutoStartFix extends XposedModule {
     private final String FCM_RECEIVE = ".android.c2dm.intent.RECEIVE";
 
+    private Intent extractIntentFromArgs(Object[] args) {
+        if (args == null) return null;
+        for (Object arg : args) {
+            if (arg instanceof Intent) {
+                return (Intent) arg;
+            } else if (arg != null) {
+                try {
+                    Object obj = XposedHelpers.getObjectField(arg, "intent");
+                    if (obj instanceof Intent) {
+                        return (Intent) obj;
+                    }
+                } catch (Throwable ignored) {}
+            }
+        }
+        return null;
+    }
+
     public AutoStartFix(ClassLoader classLoader){
         super(classLoader);
         try{
@@ -30,8 +47,8 @@ public class AutoStartFix extends XposedModule {
             XposedUtils.findAndHookMethodAnyParam(BroadcastQueueInjector,"checkApplicationAutoStart",new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam methodHookParam) {
-                    Intent intent = (Intent) XposedHelpers.getObjectField(methodHookParam.args[2], "intent");
-                    if(isFCMIntent(intent)){
+                    Intent intent = extractIntentFromArgs(methodHookParam.args);
+                    if (intent != null && isFCMIntent(intent)){
                         String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
                         if(targetIsAllow(target)){
                             XposedHelpers.callStaticMethod(BroadcastQueueInjector,"checkAbnormalBroadcastInQueueLocked", methodHookParam.args[1], methodHookParam.args[0]);
@@ -50,8 +67,8 @@ public class AutoStartFix extends XposedModule {
             XposedUtils.findAndHookMethodAnyParam(BroadcastQueueImpl,"checkApplicationAutoStart",new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam methodHookParam) {
-                    Intent intent = (Intent) XposedHelpers.getObjectField(methodHookParam.args[1], "intent");
-                    if(isFCMIntent(intent)){
+                    Intent intent = extractIntentFromArgs(methodHookParam.args);
+                    if (intent != null && isFCMIntent(intent)){
                         String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
                         if(targetIsAllow(target)){
                             XposedHelpers.callMethod(methodHookParam.thisObject, "checkAbnormalBroadcastInQueueLocked", methodHookParam.args[0]);
@@ -72,19 +89,17 @@ public class AutoStartFix extends XposedModule {
             XposedUtils.findAndHookMethodAnyParam(BroadcastQueueImpl,"checkApplicationAutoStart", new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam methodHookParam) {
-                    Intent intent = (Intent) XposedHelpers.getObjectField(methodHookParam.args[1], "intent");
-                    String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
-                    if (targetIsAllow(target)) {
-                        // 无日志，先放了
-                        printLog("[" + intent.getAction() + "]checkApplicationAutoStart package_name: " + target, true);
-                        methodHookParam.setResult(true);
-//                        if(isFCMIntent(intent)){
-//                            printLog("checkApplicationAutoStart package_name: " + target, true);
-//                            methodHookParam.setResult(true);
-//                        }else{
-//                            printLog("[skip][" + intent.getAction() + "]checkApplicationAutoStart package_name: " + target, true);
-//                        }
-
+                    Intent intent = extractIntentFromArgs(methodHookParam.args);
+                    if (intent != null) {
+                        String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
+                        if (targetIsAllow(target)) {
+                            if(isFCMIntent(intent)){
+                                printLog("checkApplicationAutoStart package_name: " + target, true);
+                                methodHookParam.setResult(true);
+                            }else{
+                                printLog("[skip][" + intent.getAction() + "]checkApplicationAutoStart package_name: " + target, true);
+                            }
+                        }
                     }
                 }
             });
@@ -93,12 +108,14 @@ public class AutoStartFix extends XposedModule {
             XposedUtils.findAndHookMethodAnyParam(BroadcastQueueImpl,"checkReceiverIfRestricted", new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam methodHookParam) {
-                    Intent intent = (Intent) XposedHelpers.getObjectField(methodHookParam.args[1], "intent");
-                    String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
-                    if(targetIsAllow(target)){
-                        if(isFCMIntent(intent)){
-                            printLog("BroadcastQueueModernStubImpl.checkReceiverIfRestricted package_name: " + target, true);
-                            methodHookParam.setResult(false);
+                    Intent intent = extractIntentFromArgs(methodHookParam.args);
+                    if (intent != null) {
+                        String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
+                        if(targetIsAllow(target)){
+                            if(isFCMIntent(intent)){
+                                printLog("BroadcastQueueModernStubImpl.checkReceiverIfRestricted package_name: " + target, true);
+                                methodHookParam.setResult(false);
+                            }
                         }
                     }
                 }
@@ -112,18 +129,17 @@ public class AutoStartFix extends XposedModule {
             XC_MethodHook methodHook = new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam methodHookParam) {
-                    Intent intent = (Intent) methodHookParam.args[1];
-                    String target = intent.getComponent().getPackageName();
-                    if(targetIsAllow(target)) {
-                        // 拿不到action，先放了
-                        printLog("[" + intent.getAction() + "]AutoStartManagerServiceStubImpl.isAllowStartService package_name: " + target, true);
-                        methodHookParam.setResult(true);
-//                        if(isFCMIntent(intent)){
-//                            printLog("AutoStartManagerServiceStubImpl.isAllowStartService package_name: " + target, true);
-//                            methodHookParam.setResult(true);
-//                        }else{
-//                            printLog("[skip][" + intent.getAction() + "]AutoStartManagerServiceStubImpl.isAllowStartService package_name: " + target, true);
-//                        }
+                    Intent intent = extractIntentFromArgs(methodHookParam.args);
+                    if (intent != null && intent.getComponent() != null) {
+                        String target = intent.getComponent().getPackageName();
+                        if(targetIsAllow(target)) {
+                            if(isFCMIntent(intent)){
+                                printLog("AutoStartManagerServiceStubImpl.isAllowStartService package_name: " + target, true);
+                                methodHookParam.setResult(true);
+                            }else{
+                                printLog("[skip][" + intent.getAction() + "]AutoStartManagerServiceStubImpl.isAllowStartService package_name: " + target, true);
+                            }
+                        }
                     }
                 }
             };
@@ -145,12 +161,14 @@ public class AutoStartFix extends XposedModule {
             XposedUtils.findAndHookMethodAnyParam(SmartPowerService, "shouldInterceptBroadcast", new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam methodHookParam) {
-                    Intent intent = (Intent) XposedHelpers.getObjectField(methodHookParam.args[1], "intent");
-                    String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
-                    if(targetIsAllow(target)) {
-                        if(isFCMIntent(intent)){
-                            printLog("SmartPowerService.shouldInterceptBroadcast package_name: " + target, true);
-                            methodHookParam.setResult(false);
+                    Intent intent = extractIntentFromArgs(methodHookParam.args);
+                    if (intent != null) {
+                        String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
+                        if(targetIsAllow(target)) {
+                            if(isFCMIntent(intent)){
+                                printLog("SmartPowerService.shouldInterceptBroadcast package_name: " + target, true);
+                                methodHookParam.setResult(false);
+                            }
                         }
                     }
                 }
@@ -165,7 +183,16 @@ public class AutoStartFix extends XposedModule {
                 "com.android.server.am.OplusAppStartupManager",
                 "com.android.server.am.OplusAppStartupManagerService",
                 "com.android.server.am.OplusHansManager",
-                "com.android.server.hans.OplusHansManager"
+                "com.android.server.hans.OplusHansManager",
+                "com.android.server.am.OplusStartupManager",
+                "com.android.server.am.OplusAppStartControlManager"
+            };
+            String[] methodNames = {
+                "shouldPreventSendReceiverReal",
+                "shouldPreventSendReceiver",
+                "shouldPreventStartBroadcast",
+                "shouldPreventStartService",
+                "isAutoStartDenied"
             };
             boolean hooked = false;
             for (String className : classNames) {
@@ -173,25 +200,15 @@ public class AutoStartFix extends XposedModule {
                     Class<?> clazz = XposedHelpers.findClass(className, classLoader);
                     for (Method m : clazz.getDeclaredMethods()) {
                         String name = m.getName();
-                        if ("shouldPreventSendReceiverReal".equals(name) || "shouldPreventSendReceiver".equals(name) || "shouldPreventStartBroadcast".equals(name)) {
+                        boolean isTarget = false;
+                        for (String mn : methodNames) {
+                            if (mn.equals(name)) { isTarget = true; break; }
+                        }
+                        if (isTarget) {
                             XposedBridge.hookMethod(m, new XC_MethodHook() {
                                 @Override
                                 protected void beforeHookedMethod(MethodHookParam methodHookParam) {
-                                    Intent intent = null;
-                                    for (Object arg : methodHookParam.args) {
-                                        if (arg instanceof Intent) {
-                                            intent = (Intent) arg;
-                                            break;
-                                        } else if (arg != null) {
-                                            try {
-                                                Object obj = XposedHelpers.getObjectField(arg, "intent");
-                                                if (obj instanceof Intent) {
-                                                    intent = (Intent) obj;
-                                                    break;
-                                                }
-                                            } catch (Throwable ignored) {}
-                                        }
-                                    }
+                                    Intent intent = extractIntentFromArgs(methodHookParam.args);
                                     if (intent != null && isFCMIntent(intent)) {
                                         String target = intent.getPackage();
                                         if (target == null && intent.getComponent() != null) {
@@ -206,23 +223,23 @@ public class AutoStartFix extends XposedModule {
                                             }
                                         }
                                         if (target == null || targetIsAllow(target)) {
-                                            printLog("[AutoStartFix] ColorOS 16 bypassed receiver restriction for " + target, true);
+                                            printLog("[AutoStartFix] ColorOS bypassed " + m.getName() + " for " + target, true);
                                             methodHookParam.setResult(false);
                                         }
                                     }
                                 }
                             });
-                            printLog("Hooked " + className + "." + name + " (" + m.getParameterCount() + " params)");
+                            printLog("[AutoStartFix] Hooked " + className + "." + name + " (" + m.getParameterCount() + " params)");
                             hooked = true;
                         }
                     }
                 } catch (Throwable ignored) {}
             }
             if (!hooked) {
-                printLog("Warning: Could not hook ColorOS startup manager methods");
+                printLog("[AutoStartFix] Warning: Could not hook ColorOS startup manager methods");
             }
         } catch (Throwable e) {
-            printLog("AutoStartFix ColorOS 16 error: " + e.getMessage());
+            printLog("[AutoStartFix] ColorOS hook error: " + e.getMessage());
         }
     }
 
@@ -234,12 +251,14 @@ public class AutoStartFix extends XposedModule {
 
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
-                    Intent intent = (Intent) param.args[0];
-                    if("com.google.firebase.MESSAGING_EVENT".equals(intent.getAction())){
-                        String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
-                        if(targetIsAllow(target)){
-                            printLog("Disable MIUI Intercept: " + target, true);
-                            param.setResult(false);
+                    if (param.args.length > 0 && param.args[0] instanceof Intent) {
+                        Intent intent = (Intent) param.args[0];
+                        if("com.google.firebase.MESSAGING_EVENT".equals(intent.getAction())){
+                            String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
+                            if(targetIsAllow(target)){
+                                printLog("Disable MIUI Intercept: " + target, true);
+                                param.setResult(false);
+                            }
                         }
                     }
                 }

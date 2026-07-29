@@ -38,7 +38,7 @@ public class IceboxUtils extends BroadcastReceiver {
             Bundle extra = new Bundle();
             extra.putParcelable("authorize", queryPermission(context));
             Bundle bundle = context.getContentResolver().call(NO_PERMISSION_URI, "query_mode", null, extra);
-            assert bundle != null;
+            if (bundle == null) return false;
             return !Objects.equals(bundle.getString("work_mode", null), "MODE_NOT_AVAILABLE");
         } catch (Throwable e) {
             Log.e(TAG, "[icebox] queryWorkMode: " + e.getMessage());
@@ -58,7 +58,7 @@ public class IceboxUtils extends BroadcastReceiver {
 
     @RequiresPermission(SDK_PERMISSION)
     public static void enableApp(Context context, boolean enable, String... packageNames) {
-        int userHandle = Process.myUserHandle().hashCode();
+        int userHandle = android.os.Process.myUid() / 100000;
         Bundle extra = new Bundle();
         extra.putParcelable("authorize", queryPermission(context));
         extra.putStringArray("package_names", packageNames);

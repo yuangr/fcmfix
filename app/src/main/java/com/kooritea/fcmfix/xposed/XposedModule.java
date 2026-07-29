@@ -23,6 +23,8 @@ import com.kooritea.fcmfix.libxposed.XposedHelpers;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -33,12 +35,12 @@ public abstract class XposedModule {
 
     protected final ClassLoader classLoader;
     public static volatile Set<String> allowList = null;
-    static final String TAG = "FcmFix";
-    private static final HashMap<String, Object> config = new HashMap<>();
+    static final String TAG = "fcmfix";
+    private static final ConcurrentHashMap<String, Object> config = new ConcurrentHashMap<>();
 
     @SuppressLint("StaticFieldLeak")
     protected static Context context = null;
-    private static final ArrayList<XposedModule> instances = new ArrayList<>();
+    private static final CopyOnWriteArrayList<XposedModule> instances = new CopyOnWriteArrayList<>();
     private static Boolean isInitReceiver = false;
     public static volatile Boolean isBootComplete = true; // Default true, no need to block for 30s
     private static Thread loadConfigThread = null;
@@ -98,8 +100,7 @@ public abstract class XposedModule {
         printLog(text, false);
     }
 
-    protected static void printLog(String text, Boolean isDiagnosticsLog) {
-        Log.d(TAG, text);
+    protected static void printLog(String text, boolean isDiagnosticsLog) {
         if (isDiagnosticsLog) {
             Intent log = new Intent("com.kooritea.fcmfix.log");
             log.putExtra("text", "[" + getSelfPackageName() + "]" + text);
@@ -138,6 +139,7 @@ public abstract class XposedModule {
     };
 
     protected boolean targetIsAllow(String packageName) {
+        if (packageName == null || packageName.isEmpty()) return false;
         if (config.get("init") == null) {
             this.checkUserDeviceUnlockAndUpdateConfig();
         }
@@ -172,7 +174,9 @@ public abstract class XposedModule {
                         if (remotePreferences == null) {
                             throw new IllegalStateException("remotePreferences 不可用");
                         }
-                        Set<String> newAllowList = remotePreferences.getStringSet("allowList", allowList == null ? new HashSet<>() : allowList);
+                        Set<String> prefSet = remotePreferences.getStringSet("allowList", allowList == null ? new HashSet<>() : allowList);
+                        Set<String> newAllowList = ConcurrentHashMap.newKeySet();
+                        if (prefSet != null) newAllowList.addAll(prefSet);
                         allowList = newAllowList;
                         if (allowList != null && "android".equals(getSelfPackageName())) {
                             printLog("[Modern Xposed API]onUpdateConfig allowList size: " + allowList.size());
@@ -219,7 +223,7 @@ public abstract class XposedModule {
                             onUpdateConfig();
                         }
                     }
-                }, updateConfigIntentFilter, Context.RECEIVER_EXPORTED);
+                }, updateConfigIntentFilter, "com.kooritea.fcmfix.permission.BROADCAST", null, Context.RECEIVER_EXPORTED);
             } else {
                 context.registerReceiver(new BroadcastReceiver() {
                     public void onReceive(Context context, Intent intent) {
@@ -228,7 +232,7 @@ public abstract class XposedModule {
                             onUpdateConfig();
                         }
                     }
-                }, updateConfigIntentFilter);
+                }, updateConfigIntentFilter, "com.kooritea.fcmfix.permission.BROADCAST", null);
             }
 
             IntentFilter unInstallIntentFilter = new IntentFilter();
@@ -239,7 +243,7 @@ public abstract class XposedModule {
                     String action = intent.getAction();
                     if (Intent.ACTION_PACKAGE_REMOVED.equals(action) && "com.kooritea.fcmfix".equals(intent.getData().getSchemeSpecificPart())) {
                         Bundle extras = intent.getExtras();
-                        if (extras.containsKey(Intent.EXTRA_REPLACING) && extras.getBoolean(Intent.EXTRA_REPLACING)) {
+                        if (extras != null && extras.containsKey(Intent.EXTRA_REPLACING) && extras.getBoolean(Intent.EXTRA_REPLACING)) {
                             return;
                         }
                         onUninstallFcmfix();
@@ -289,12 +293,28 @@ public abstract class XposedModule {
     protected boolean isFCMAction(String action) {
         return action != null && (action.endsWith(".android.c2dm.intent.RECEIVE") ||
                 "com.google.firebase.MESSAGING_EVENT".equals(action) ||
-                "com.google.firebase.INSTANCE_ID_EVENT".equals(action));
+                "com.google.firebase.INSTANCE_ID_EVENT".equals(action) ||
+                "com.google.android.c2dm.intent.REGISTRATION".equals(action) ||
+                "com.google.android.intent.action.GCM_NOTIFICATION".equals(action));
     }
 
     protected boolean isFCMIntent(Intent intent) {
+        if (intent == null) return false;
         String action = intent.getAction();
-        return isFCMAction(action);
+        if (isFCMAction(action)) return true;
+        try {
+            if (intent.getExtras() != null) {
+                // Strong signal: unique FCM keys
+                if (intent.hasExtra("google.message_id") || intent.hasExtra("gcm.message_id")) {
+                    return true;
+                }
+                // Weaker signal: require both "from" and "collapse_key" together
+                if (intent.hasExtra("from") && intent.hasExtra("collapse_key")) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
     }
 
     protected static String getSelfPackageName() {

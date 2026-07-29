@@ -7,7 +7,7 @@ android {
     defaultConfig {
         applicationId "com.kooritea.fcmfix"
         minSdkVersion 29
-        targetSdkVersion 34
+        targetSdkVersion 36
         versionCode 53
         versionName "dev"
 
