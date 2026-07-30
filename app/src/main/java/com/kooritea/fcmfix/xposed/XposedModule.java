@@ -116,12 +116,16 @@ public abstract class XposedModule {
     }
 
     protected void checkUserDeviceUnlockAndUpdateConfig() {
-        if (context != null && context.getSystemService(UserManager.class).isUserUnlocked()) {
-            try {
-                onUpdateConfig();
-            } catch (Throwable e) {
-                printLog("更新配置文件失败: " + e.getMessage());
+        if (context != null) {
+            UserManager um = context.getSystemService(UserManager.class);
+            if (um != null && !um.isUserUnlocked()) {
+                return; // Device is locked, can't read config
             }
+        }
+        try {
+            onUpdateConfig();
+        } catch (Throwable e) {
+            printLog("更新配置文件失败: " + e.getMessage());
         }
     }
 
@@ -142,6 +146,9 @@ public abstract class XposedModule {
         if (packageName == null || packageName.isEmpty()) return false;
         if (config.get("init") == null) {
             this.checkUserDeviceUnlockAndUpdateConfig();
+            try {
+                if (loadConfigThread != null) loadConfigThread.join(2000);
+            } catch (InterruptedException ignored) {}
         }
         if ("com.kooritea.fcmfix".equals(packageName)) {
             return true;
@@ -155,6 +162,9 @@ public abstract class XposedModule {
     protected boolean getBooleanConfig(String key, boolean defaultValue) {
         if (config.get("init") == null) {
             this.checkUserDeviceUnlockAndUpdateConfig();
+            try {
+                if (loadConfigThread != null) loadConfigThread.join(2000);
+            } catch (InterruptedException ignored) {}
         }
         if (config.get("init") == null) {
             return defaultValue;

@@ -53,8 +53,21 @@ public class BroadcastFix extends XposedModule {
         int intent_args_index = -1;
         int appOp_args_index = -1;
 
-        // === Path 1: Android 15+ BroadcastController (API >= 35) ===
-        if(Build.VERSION.SDK_INT >= 35){
+        // === Path 0: broadcastIntentWithFeature (API 30+) ===
+        String[] possibleClasses = {
+            "com.android.server.am.BroadcastController",
+            "com.android.server.am.ActivityManagerService"
+        };
+        for (String className : possibleClasses) {
+            targetMethod = XposedUtils.tryFindMethodMostParam(classLoader, className, "broadcastIntentWithFeature");
+            if (targetMethod != null) {
+                printLog("[BroadcastFix] Found broadcastIntentWithFeature in " + className + " with " + targetMethod.getParameterCount() + " params");
+                break;
+            }
+        }
+        
+        // === Path 1: Android 15+ BroadcastController (API >= 35) fallback ===
+        if(targetMethod == null && Build.VERSION.SDK_INT >= 35){
             String[] controllerClasses = {
                 "com.android.server.am.BroadcastController",
                 "com.android.server.am.BroadcastQueueModernImpl"
@@ -62,7 +75,7 @@ public class BroadcastFix extends XposedModule {
             for (String className : controllerClasses) {
                 targetMethod = XposedUtils.tryFindMethodMostParam(classLoader, className, "broadcastIntentLocked");
                 if (targetMethod != null) {
-                    printLog("[BroadcastFix] Found method in " + className + " with " + targetMethod.getParameterCount() + " params");
+                    printLog("[BroadcastFix] Found broadcastIntentLocked in " + className + " with " + targetMethod.getParameterCount() + " params");
                     break;
                 }
             }
@@ -130,50 +143,54 @@ public class BroadcastFix extends XposedModule {
                         appOp_args_index = 13;
                     }
                 }
-                // Dynamic fallback if hardcoded index check didn't match
-                if(intent_args_index == -1 || appOp_args_index == -1 ||
-                   intent_args_index >= parameters.length || appOp_args_index >= parameters.length ||
-                   parameters[intent_args_index].getType() != Intent.class || parameters[appOp_args_index].getType() != int.class){
-                    intent_args_index = -1;
-                    appOp_args_index = -1;
-                    for(int i = 0; i < parameters.length; i++){
-                        if("appOp".equals(parameters[i].getName()) && parameters[i].getType() == int.class){
-                            appOp_args_index = i;
-                        }
-                        if("intent".equals(parameters[i].getName()) && parameters[i].getType() == Intent.class){
-                            intent_args_index = i;
-                        }
-                    }
-                    if(intent_args_index == -1){
-                        for(int i = 0; i < parameters.length; i++){
-                            if(parameters[i].getType() == Intent.class){
-                                intent_args_index = i;
-                                break;
-                            }
-                        }
-                    }
-                    if(appOp_args_index == -1){
-                        for(int i = parameters.length - 1; i >= 0; i--){
-                            if(parameters[i].getType() == int.class){
-                                appOp_args_index = i;
-                                break;
-                            }
-                        }
-                    }
-                }
-                printLog("[BroadcastFix] AMS detection result: intent_idx=" + intent_args_index + ", appOp_idx=" + appOp_args_index);
             } else {
                 printLog("[BroadcastFix] ActivityManagerService.broadcastIntentLocked not found either!");
             }
         }
 
-        if(targetMethod != null && intent_args_index >= 0 && appOp_args_index >= 0 &&
-           intent_args_index < targetMethod.getParameterCount() && appOp_args_index < targetMethod.getParameterCount() &&
+        // Dynamic fallback for parameter indices
+        if(targetMethod != null){
+            Parameter[] parameters = targetMethod.getParameters();
+            if(intent_args_index == -1 || appOp_args_index == -1 ||
+               intent_args_index >= parameters.length || (appOp_args_index != -1 && appOp_args_index >= parameters.length) ||
+               parameters[intent_args_index].getType() != Intent.class || (appOp_args_index >= 0 && parameters[appOp_args_index].getType() != int.class)){
+                intent_args_index = -1;
+                appOp_args_index = -1;
+                for(int i = 0; i < parameters.length; i++){
+                    if("appOp".equals(parameters[i].getName()) && parameters[i].getType() == int.class){
+                        appOp_args_index = i;
+                    }
+                    if("intent".equals(parameters[i].getName()) && parameters[i].getType() == Intent.class){
+                        intent_args_index = i;
+                    }
+                }
+                if(intent_args_index == -1){
+                    for(int i = 0; i < parameters.length; i++){
+                        if(parameters[i].getType() == Intent.class){
+                            intent_args_index = i;
+                            break;
+                        }
+                    }
+                }
+                if(appOp_args_index == -1){
+                    for(int i = parameters.length - 1; i >= 0; i--){
+                        if(parameters[i].getType() == int.class){
+                            appOp_args_index = i;
+                            break;
+                        }
+                    }
+                }
+            }
+            printLog("[BroadcastFix] Detection result: intent_idx=" + intent_args_index + ", appOp_idx=" + appOp_args_index);
+        }
+
+        if(targetMethod != null && intent_args_index >= 0 &&
+           intent_args_index < targetMethod.getParameterCount() &&
            targetMethod.getParameters()[intent_args_index].getType() == Intent.class &&
-           targetMethod.getParameters()[appOp_args_index].getType() == int.class){
+           (appOp_args_index == -1 || (appOp_args_index < targetMethod.getParameterCount() && targetMethod.getParameters()[appOp_args_index].getType() == int.class))){
             createBroadcastIntentLockedHooker(intent_args_index, appOp_args_index, targetMethod);
         } else {
-            printLog("[BroadcastFix] broadcastIntentLocked hook 位置查找失败，fcmfix将不会工作。targetMethod=" + (targetMethod != null ? targetMethod.getDeclaringClass().getName() : "null") + " intent_idx=" + intent_args_index + " appOp_idx=" + appOp_args_index);
+            printLog("[BroadcastFix] broadcastIntent hook 位置查找失败，fcmfix将不会工作。targetMethod=" + (targetMethod != null ? targetMethod.getDeclaringClass().getName() : "null") + " intent_idx=" + intent_args_index + " appOp_idx=" + appOp_args_index);
         }
     }
 
@@ -211,9 +228,11 @@ public class BroadcastFix extends XposedModule {
                     if(!hasStoppedFlag){
                         // If target is in allowList OR target is null (safeguard for FCM intents), add FLAG_INCLUDE_STOPPED_PACKAGES
                         if(target == null || targetIsAllow(target)){
-                            int i = (Integer) methodHookParam.args[finalAppOp_args_index];
-                            if (i == -1) {
-                                methodHookParam.args[finalAppOp_args_index] = 11;
+                            if(finalAppOp_args_index >= 0) {
+                                int i = (Integer) methodHookParam.args[finalAppOp_args_index];
+                                if (i == -1) {
+                                    methodHookParam.args[finalAppOp_args_index] = 11;
+                                }
                             }
                             intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
                             printLog("[BroadcastFix] Added FLAG_INCLUDE_STOPPED_PACKAGES for target=" + target, true);

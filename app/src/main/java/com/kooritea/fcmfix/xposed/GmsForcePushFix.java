@@ -22,15 +22,6 @@ public class GmsForcePushFix extends XposedModule {
         }
     }
 
-    private boolean isFCMStack() {
-        for (StackTraceElement el : new Throwable().getStackTrace()) {
-            String className = el.getClassName();
-            if (className.contains("chimera") || className.contains("gcm") || className.contains("firebase")) {
-                return true;
-            }
-        }
-        return false;
-    }
 
     private void startHookPackageManager() {
         // We hook ApplicationPackageManager inside the GMS process
@@ -58,9 +49,6 @@ public class GmsForcePushFix extends XposedModule {
                             
                             String packageName = (String) param.args[0];
                             if (packageName == null || !targetIsAllow(packageName)) {
-                                return;
-                            }
-                            if (!isFCMStack()) {
                                 return;
                             }
                             
@@ -98,10 +86,8 @@ public class GmsForcePushFix extends XposedModule {
                         protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                             String packageName = (String) param.args[0];
                             if (packageName != null && targetIsAllow(packageName)) {
-                                if (isFCMStack()) {
-                                    param.setResult(false);
-                                    printLog("[GmsForcePushFix] Forced " + name + " to false for " + packageName, true);
-                                }
+                                param.setResult(false);
+                                printLog("[GmsForcePushFix] Forced " + name + " to false for " + packageName, true);
                             }
                         }
                     });

@@ -47,7 +47,7 @@ public class XposedMain extends io.github.libxposed.api.XposedModule {
         if ("com.google.android.gms".equals(param.getPackageName()) && param.isFirstPackage()) {
             XposedModule.setSelfPackageName("com.google.android.gms");
             XposedBridge.log("[fcmfix] start hook com.google.android.gms");
-            new ReconnectManagerFix(param.getClassLoader());
+            try { new ReconnectManagerFix(param.getClassLoader()); } catch (Throwable e) { XposedBridge.log("[fcmfix] ReconnectManagerFix init failed: " + e.getMessage()); }
             try { new GmsForcePushFix(param.getClassLoader()); } catch (Throwable e) { XposedBridge.log("[fcmfix] GmsForcePushFix init failed: " + e.getMessage()); }
         }
 
