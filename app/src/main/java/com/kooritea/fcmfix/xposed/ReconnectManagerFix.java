@@ -1,5 +1,6 @@
 package com.kooritea.fcmfix.xposed;
 
+import android.app.Activity;
 import android.annotation.SuppressLint;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
@@ -301,7 +302,8 @@ public class ReconnectManagerFix extends XposedModule {
                 @SuppressLint("SetTextI18n")
                 @Override
                 protected void afterHookedMethod(final MethodHookParam param) {
-                    ViewGroup viewGroup = ((Window)XposedHelpers.callMethod(param.thisObject, "getWindow")).getDecorView().findViewById(android.R.id.content);
+                    Activity activity = (Activity) param.thisObject;
+                    ViewGroup viewGroup = activity.getWindow().getDecorView().findViewById(android.R.id.content);
                     LinearLayout linearLayout = (LinearLayout)viewGroup.getChildAt(0);
                     LinearLayout linearLayout2 = (LinearLayout)linearLayout.getChildAt(0);
 
