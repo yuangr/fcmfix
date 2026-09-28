@@ -27,3 +27,6 @@ Thumbs.db
 # Local build tools and audit experiments
 .tooling/
 docs/review-repro-*/
+
+# Downloaded CI artifacts
+/artifacts/
