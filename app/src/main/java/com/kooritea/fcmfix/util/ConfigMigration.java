@@ -3,19 +3,23 @@ package com.kooritea.fcmfix.util;
 import android.content.SharedPreferences;
 import com.kooritea.fcmfix.core.ConfigSnapshot;
 
-/** Restores an explicitly retained local cache only when the framework has no config yet. */
+/** Restores a retained cache into empty preferences, or on a one-time explicit restore marker. */
 public final class ConfigMigration {
     public enum Result { NONE, IMPORTED, FAILED }
     private ConfigMigration() {}
 
     public static Result seedEmptyRemote(SharedPreferences remote, SharedPreferences local) {
-        if (!remote.getAll().isEmpty() || !local.getBoolean("hasLocalCache", false)) return Result.NONE;
+        boolean explicitRestore = local.getBoolean("restoreRemotePending", false);
+        if (!local.getBoolean("hasLocalCache", false)
+                || (!explicitRestore && !remote.getAll().isEmpty())) return Result.NONE;
         ConfigSnapshot snapshot = ConfigSnapshot.from(local.getAll());
         boolean saved = remote.edit().putBoolean("init", true)
                 .putStringSet("allowList", snapshot.allowList)
                 .putBoolean("disableAutoCleanNotification", snapshot.disableAutoCleanNotification)
                 .putBoolean("includeIceBoxDisableApp", snapshot.includeIceBoxDisableApp)
                 .putBoolean("noResponseNotification", snapshot.noResponseNotification).commit();
-        return saved ? Result.IMPORTED : Result.FAILED;
+        if (!saved) return Result.FAILED;
+        if (explicitRestore && !local.edit().putBoolean("restoreRemotePending", false).commit()) return Result.FAILED;
+        return Result.IMPORTED;
     }
 }

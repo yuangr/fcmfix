@@ -37,6 +37,16 @@ public class ConfigMigrationTest {
         when(local.getBoolean("hasLocalCache",false)).thenReturn(false);
         assertEquals(ConfigMigration.Result.NONE,ConfigMigration.seedEmptyRemote(remote,local)); verifyNoInteractions(editor);
     }
+    @Test public void explicitRestoreReplacesStaleFrameworkCacheOnce() {
+        localValues(); when(editor.commit()).thenReturn(true);
+        when(local.getBoolean("restoreRemotePending",false)).thenReturn(true);
+        doReturn(Collections.singletonMap("allowList",Collections.singleton("stale"))).when(remote).getAll();
+        SharedPreferences.Editor localEditor=mock(SharedPreferences.Editor.class, RETURNS_SELF);
+        when(local.edit()).thenReturn(localEditor); when(localEditor.commit()).thenReturn(true);
+        assertEquals(ConfigMigration.Result.IMPORTED,ConfigMigration.seedEmptyRemote(remote,local));
+        verify(editor).putStringSet("allowList",new HashSet<>(Arrays.asList("one","two")));
+        verify(localEditor).putBoolean("restoreRemotePending",false); verify(localEditor).commit();
+    }
     @Test public void failedCommitReportsFailureSoCallerKeepsLocalState() {
         localValues(); when(editor.commit()).thenReturn(false);
         assertEquals(ConfigMigration.Result.FAILED,ConfigMigration.seedEmptyRemote(remote,local));
