@@ -34,9 +34,10 @@
 
 ### GitHub 编译
 
-推送到 `main`、`codex/**` 分支或向 `main` 提交 PR，会运行 32 项 JVM 回归测试并生成 Release APK。打开仓库 **Actions → Android CI → 对应运行 → Artifacts → unsigned-apk** 下载。
+推送到 `main`、`codex/**` 分支或向 `main` 提交 PR，会运行 32 项 JVM 回归测试并生成 Release APK。打开仓库 **Actions → Android CI → 对应运行 → Artifacts → signed-apk（未配置签名时为 unsigned-apk）** 下载。
 
-- 默认构建产物未签名，安装前需要使用原版本相同的密钥签名以覆盖升级。
+- 仓库配置四项签名 secrets 后，普通分支构建会额外生成可安装的 `signed-apk`；PR 仅生成未签名 APK。覆盖升级要求与已安装版本使用相同密钥。
+- 本仓库已建立固定项目签名。本机 `.signing/` 为私密密钥副本，被 Git 忽略，切勿公开或删除；仅私密备份后再清理。旧版签名不同需保存配置后更换安装一次。
 - 发布：在 `main` 分支手动运行工作流，勾选 `publish`。需要仓库已配置 `SIGNINGKEYBASE64`、`ALIAS`、`KEYSTOREPASSWORD`、`KEYPASSWORD` 四项签名 secrets；测试通过后签名并发布到当前仓库 Release。
 - 工作流不会向上游或 Xposed 模块仓库发布。
 - 完整任务是 `testDebugUnitTest assembleRelease`，运行环境为 JDK 17、Android SDK / Build Tools 36；本项目维护可以完全通过 GitHub 构建，无需本机安装这些工具。

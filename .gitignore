@@ -30,3 +30,6 @@ docs/review-repro-*/
 
 # Downloaded CI artifacts
 /artifacts/
+
+# Private signing material
+/.signing/

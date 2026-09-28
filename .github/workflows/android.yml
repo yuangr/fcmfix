@@ -44,6 +44,44 @@ jobs:
         with:
           name: test-results
           path: app/build/reports/tests/testDebugUnitTest
+      - name: Detect signing configuration
+        id: signing
+        if: github.event_name != 'pull_request'
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNINGKEYBASE64 }}
+          SIGNING_ALIAS: ${{ secrets.ALIAS }}
+          STORE_PASSWORD: ${{ secrets.KEYSTOREPASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEYPASSWORD }}
+        run: |
+          if [[ -n "$SIGNING_KEY" && -n "$SIGNING_ALIAS" && -n "$STORE_PASSWORD" && -n "$KEY_PASSWORD" ]]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo 'No signing configuration; unsigned APK remains available.'
+          fi
+      - name: Sign installable APK
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNINGKEYBASE64 }}
+          SIGNING_ALIAS: ${{ secrets.ALIAS }}
+          STORE_PASSWORD: ${{ secrets.KEYSTOREPASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEYPASSWORD }}
+        run: |
+          KEYSTORE_PATH="$RUNNER_TEMP/fcmfix-signing.jks"
+          trap 'rm -f "$KEYSTORE_PATH"' EXIT
+          printf '%s' "$SIGNING_KEY" | base64 --decode > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+          APK_DIR='app/build/outputs/apk/release'
+          TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          "$TOOLS/zipalign" -p -f 4 "$APK_DIR/app-release-unsigned.apk" "$APK_DIR/app-release-aligned.apk"
+          "$TOOLS/apksigner" sign --ks "$KEYSTORE_PATH" --ks-key-alias "$SIGNING_ALIAS" --ks-pass env:STORE_PASSWORD --key-pass env:KEY_PASSWORD --out "$APK_DIR/app-release-signed.apk" "$APK_DIR/app-release-aligned.apk"
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK_DIR/app-release-signed.apk"
+      - uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.ready == 'true'
+        with:
+          name: signed-apk
+          path: app/build/outputs/apk/release/app-release-signed.apk
+          if-no-files-found: error
 
   release:
     if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
@@ -55,36 +93,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: unsigned-apk
+          name: signed-apk
           path: app/build/outputs/apk/release
-      - name: Check signing configuration
-        env:
-          SIGNING_KEY: ${{ secrets.SIGNINGKEYBASE64 }}
-          SIGNING_ALIAS: ${{ secrets.ALIAS }}
-          STORE_PASSWORD: ${{ secrets.KEYSTOREPASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEYPASSWORD }}
-        run: |
-          if [[ -z "$SIGNING_KEY" || -z "$SIGNING_ALIAS" || -z "$STORE_PASSWORD" || -z "$KEY_PASSWORD" ]]; then
-            echo 'Signing secrets must be configured before publishing.' >&2
-            exit 1
-          fi
-      - name: Select build tools
-        run: echo "BUILD_TOOL_VERSION=$(ls /usr/local/lib/android/sdk/build-tools/ | sort -V | tail -n 1)" >> "$GITHUB_ENV"
-      - name: Sign APK
-        uses: r0adkll/sign-android-release@v1
-        with:
-          releaseDirectory: app/build/outputs/apk/release
-          signingKeyBase64: ${{ secrets.SIGNINGKEYBASE64 }}
-          alias: ${{ secrets.ALIAS }}
-          keyStorePassword: ${{ secrets.KEYSTOREPASSWORD }}
-          keyPassword: ${{ secrets.KEYPASSWORD }}
-        env:
-          BUILD_TOOLS_VERSION: ${{ env.BUILD_TOOL_VERSION }}
       - name: Read version
         run: |
           VERSION_NAME=$(sed -n 's/.*versionName "\([^"]*\)".*/\1/p' app/build.gradle)
           echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
-          mv app/build/outputs/apk/release/app-release-unsigned-signed.apk "fcmfix-${VERSION_NAME}.apk"
+          mv app/build/outputs/apk/release/app-release-signed.apk "fcmfix-${VERSION_NAME}.apk"
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION_NAME }}
