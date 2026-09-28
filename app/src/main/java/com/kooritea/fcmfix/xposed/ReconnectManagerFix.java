@@ -31,16 +31,23 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.lang.reflect.Parameter;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.HashMap;
+import java.util.Map;
+import java.lang.reflect.Executable;
+import java.util.concurrent.atomic.AtomicBoolean;
+import com.kooritea.fcmfix.core.LatestTaskScheduler;
 import com.kooritea.fcmfix.libxposed.XC_MethodHook;
 import com.kooritea.fcmfix.libxposed.XposedBridge;
 import com.kooritea.fcmfix.libxposed.XposedHelpers;
 
 public class ReconnectManagerFix extends XposedModule {
-    private static final ScheduledExecutorService reconnectExecutor = Executors.newSingleThreadScheduledExecutor();
+    private static final LatestTaskScheduler<Object> watchdogs = new LatestTaskScheduler<>(new ScheduledThreadPoolExecutor(1));
+    private final Map<Executable, XC_MethodHook.Unhook> registeredHooks = new HashMap<>();
+
+    private synchronized void hookOnce(Executable target, XC_MethodHook callback) {
+        if (!registeredHooks.containsKey(target)) registeredHooks.put(target, XposedBridge.hookMethod(target, callback));
+    }
 
     private Class<?> GcmChimeraService;
     private String GcmChimeraServiceLogMethodName;
@@ -96,7 +103,8 @@ public class ReconnectManagerFix extends XposedModule {
             XposedHelpers.findAndHookMethod(this.GcmChimeraService, "onDestroy", new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(final MethodHookParam param) {
-                    context.unregisterReceiver(logBroadcastReceive);
+                    try { context.unregisterReceiver(logBroadcastReceive); } catch (IllegalArgumentException ignored) {}
+                    watchdogs.cancelAll();
                 }
             });
         }catch (Throwable e){
@@ -149,13 +157,15 @@ public class ReconnectManagerFix extends XposedModule {
         startHook();
     }
 
-    protected void startHook() {
+    protected synchronized void startHook() {
         final SharedPreferences sharedPreferences = context.getSharedPreferences("fcmfix_config", Context.MODE_PRIVATE);
         printLog("timer_class: "+ sharedPreferences.getString("timer_class", ""), true);
         printLog("timer_alarm_type_property: "+ sharedPreferences.getString("timer_alarm_type_property", ""), true);
         printLog("timer_settimeout_method: "+ sharedPreferences.getString("timer_settimeout_method", ""), true);
         final Class<?> timerClazz = XposedHelpers.findClass(sharedPreferences.getString("timer_class", ""), classLoader);
-        XposedHelpers.findAndHookMethod(timerClazz, "toString", new XC_MethodHook() {
+        try {
+            // Do not hook Object.toString globally when the timer has no override.
+            hookOnce(timerClazz.getDeclaredMethod("toString"), new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(final MethodHookParam param) {
                 String alarmType = (String) XposedUtils.getObjectFieldByPath(param.thisObject,  sharedPreferences.getString("timer_alarm_type_property", ""));
@@ -168,7 +178,9 @@ public class ReconnectManagerFix extends XposedModule {
                 }
             }
         });
-        XposedHelpers.findAndHookMethod(timerClazz, sharedPreferences.getString("timer_settimeout_method", ""), long.class, new XC_MethodHook() {
+        } catch (NoSuchMethodException ignored) { /* Display decoration is optional. */ }
+        Method timeout = XposedHelpers.findMethodExact(timerClazz, sharedPreferences.getString("timer_settimeout_method", ""), long.class);
+        hookOnce(timeout, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(final MethodHookParam param) {
                 // 修改心跳间隔
@@ -189,33 +201,30 @@ public class ReconnectManagerFix extends XposedModule {
 
             @Override
             protected void afterHookedMethod(final MethodHookParam param) {
-                // 防止计时器出现负数计时,分别是心跳计时和重连计时
-                String alarmType = (String) XposedUtils.getObjectFieldByPath(param.thisObject,  sharedPreferences.getString("timer_alarm_type_property", ""));
-                if ("GCM_HB_ALARM".equals(alarmType) || "GCM_CONN_ALARM".equals(alarmType)) {
-                    Field maxField = null;
-                    long maxFieldValue = 0L;
-                    for(Field field : timerClazz.getDeclaredFields()){
-                        if(field.getType() == long.class){
-                            long fieldValue = (long)XposedHelpers.getObjectField(param.thisObject,field.getName());
-                            if(maxField == null || fieldValue > maxFieldValue){
-                                maxField = field;
-                                maxFieldValue = fieldValue;
-                            }
-                        }
-                    }
-                    final Field finalMaxField = maxField;
-                    reconnectExecutor.schedule(() -> {
-                        try {
-                            long nextConnectionTime = XposedHelpers.getLongField(param.thisObject, finalMaxField.getName());
-                            if (nextConnectionTime != 0 && nextConnectionTime - SystemClock.elapsedRealtime() < -60000) {
-                                context.sendBroadcast(new Intent("com.google.android.intent.action.GCM_RECONNECT"));
-                                printLog("Send broadcast GCM_RECONNECT", true);
-                            }
-                        } catch (Throwable e) {
-                            printLog("Error in reconnect timer: " + e.getMessage());
-                        }
-                    }, (long) param.args[0] + 5000, TimeUnit.MILLISECONDS);
+                if (param.hasThrowable()) return;
+                String alarmType = (String) XposedUtils.getObjectFieldByPath(param.thisObject, sharedPreferences.getString("timer_alarm_type_property", ""));
+                if (!"GCM_HB_ALARM".equals(alarmType) && !"GCM_CONN_ALARM".equals(alarmType)) return;
+                Field maxField = null;
+                long maxValue = Long.MIN_VALUE;
+                for (Field field : timerClazz.getDeclaredFields()) {
+                    if (field.getType() != long.class || Modifier.isStatic(field.getModifiers())) continue;
+                    long value = XposedHelpers.getLongField(param.thisObject, field.getName());
+                    if (maxField == null || value > maxValue) { maxField = field; maxValue = value; }
                 }
+                if (maxField == null) { watchdogs.cancel(param.thisObject); return; }
+                final String deadlineField = maxField.getName();
+                final Object timer = param.thisObject;
+                long interval = Math.max(0L, (long) param.args[0]);
+                long delay = interval > Long.MAX_VALUE - 5000 ? Long.MAX_VALUE : interval + 5000;
+                watchdogs.replace(timer, delay, () -> {
+                    try {
+                        long deadline = XposedHelpers.getLongField(timer, deadlineField);
+                        if (deadline != 0 && deadline < SystemClock.elapsedRealtime() - 60000) {
+                            context.sendBroadcast(new Intent("com.google.android.intent.action.GCM_RECONNECT").setPackage("com.google.android.gms"));
+                            printLog("Send broadcast GCM_RECONNECT", true);
+                        }
+                    } catch (Throwable error) { printLog("Error in reconnect watchdog: " + error); }
+                });
             }
         });
     }
@@ -251,20 +260,20 @@ public class ReconnectManagerFix extends XposedModule {
             for(final Field timerClassField : timerClass.getDeclaredFields()){
                 if(Modifier.isFinal(timerClassField.getModifiers()) && Modifier.isPublic(timerClassField.getModifiers())){
                     final Class<?> alarmClass = timerClassField.getType();
-                    final Boolean[] isFinish = {false};
+                    final AtomicBoolean isFinish = new AtomicBoolean();
                     Constructor alarmClassConstructor = null;
 		            for (Constructor constructor: alarmClass.getConstructors()) {
 			            Class[] pts = constructor.getParameterTypes();
 			            if (alarmClassConstructor == null || pts.length > alarmClassConstructor.getParameterCount()) {
-                            if (pts[0] == Context.class && pts[1] == int.class && pts[2] == String.class)
+                            if (pts.length >= 3 && pts[0] == Context.class && pts[1] == int.class && pts[2] == String.class)
 				                alarmClassConstructor = constructor;
 			            }
 		            }
                     if(alarmClassConstructor == null) throw new Throwable("未找到构造函数");
-                    XposedBridge.hookMethod(alarmClassConstructor, new XC_MethodHook() {
+                    hookOnce(alarmClassConstructor, new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(final MethodHookParam param) {
-                            if(!isFinish[0]){
+                            if(!isFinish.get()){
                                 for(Field field : alarmClass.getDeclaredFields()){
                                     if(field.getType() == String.class && Modifier.isFinal(field.getModifiers()) && Modifier.isPrivate(field.getModifiers())){
                                         if(param.args[2] != null && XposedHelpers.getObjectField(param.thisObject, field.getName()) == param.args[2]){
@@ -272,7 +281,7 @@ public class ReconnectManagerFix extends XposedModule {
                                             editor.putString("timer_alarm_type_property", timerClassField.getName() + "." + field.getName());
                                             editor.putBoolean("enable", true);
                                             editor.apply();
-                                            isFinish[0] = true;
+                                            isFinish.set(true);
                                             printLog("更新hook位置成功", true);
                                             sendNotification("自动更新配置文件成功");
                                             startHook();

@@ -48,7 +48,7 @@ public class AutoStartFix extends XposedModule {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam methodHookParam) {
                     Intent intent = extractIntentFromArgs(methodHookParam.args);
-                    if (intent != null && isFCMIntent(intent)){
+                    if (intent != null && isTrustedFCMIntent(intent, methodHookParam.args)){
                         String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
                         if(targetIsAllow(target)){
                             XposedHelpers.callStaticMethod(BroadcastQueueInjector,"checkAbnormalBroadcastInQueueLocked", methodHookParam.args[1], methodHookParam.args[0]);
@@ -68,7 +68,7 @@ public class AutoStartFix extends XposedModule {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam methodHookParam) {
                     Intent intent = extractIntentFromArgs(methodHookParam.args);
-                    if (intent != null && isFCMIntent(intent)){
+                    if (intent != null && isTrustedFCMIntent(intent, methodHookParam.args)){
                         String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
                         if(targetIsAllow(target)){
                             XposedHelpers.callMethod(methodHookParam.thisObject, "checkAbnormalBroadcastInQueueLocked", methodHookParam.args[0]);
@@ -93,7 +93,7 @@ public class AutoStartFix extends XposedModule {
                     if (intent != null) {
                         String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
                         if (targetIsAllow(target)) {
-                            if(isFCMIntent(intent)){
+                            if(isTrustedFCMIntent(intent, methodHookParam.args)){
                                 printLog("checkApplicationAutoStart package_name: " + target, true);
                                 methodHookParam.setResult(true);
                             }else{
@@ -112,7 +112,7 @@ public class AutoStartFix extends XposedModule {
                     if (intent != null) {
                         String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
                         if(targetIsAllow(target)){
-                            if(isFCMIntent(intent)){
+                            if(isTrustedFCMIntent(intent, methodHookParam.args)){
                                 printLog("BroadcastQueueModernStubImpl.checkReceiverIfRestricted package_name: " + target, true);
                                 methodHookParam.setResult(false);
                             }
@@ -133,7 +133,7 @@ public class AutoStartFix extends XposedModule {
                     if (intent != null && intent.getComponent() != null) {
                         String target = intent.getComponent().getPackageName();
                         if(targetIsAllow(target)) {
-                            if(isFCMIntent(intent)){
+                            if(isTrustedFCMIntent(intent, methodHookParam.args)){
                                 printLog("AutoStartManagerServiceStubImpl.isAllowStartService package_name: " + target, true);
                                 methodHookParam.setResult(true);
                             }else{
@@ -165,7 +165,7 @@ public class AutoStartFix extends XposedModule {
                     if (intent != null) {
                         String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
                         if(targetIsAllow(target)) {
-                            if(isFCMIntent(intent)){
+                            if(isTrustedFCMIntent(intent, methodHookParam.args)){
                                 printLog("SmartPowerService.shouldInterceptBroadcast package_name: " + target, true);
                                 methodHookParam.setResult(false);
                             }
@@ -209,7 +209,7 @@ public class AutoStartFix extends XposedModule {
                                 @Override
                                 protected void beforeHookedMethod(MethodHookParam methodHookParam) {
                                     Intent intent = extractIntentFromArgs(methodHookParam.args);
-                                    if (intent != null && isFCMIntent(intent)) {
+                                    if (intent != null && isTrustedFCMIntent(intent, methodHookParam.args)) {
                                         String target = intent.getPackage();
                                         if (target == null && intent.getComponent() != null) {
                                             target = intent.getComponent().getPackageName();
@@ -222,7 +222,7 @@ public class AutoStartFix extends XposedModule {
                                                 }
                                             }
                                         }
-                                        if (target == null || targetIsAllow(target)) {
+                                        if (target != null && targetIsAllow(target) && m.getReturnType() == boolean.class) {
                                             printLog("[AutoStartFix] ColorOS bypassed " + m.getName() + " for " + target, true);
                                             methodHookParam.setResult(false);
                                         }
@@ -253,7 +253,7 @@ public class AutoStartFix extends XposedModule {
                 protected void afterHookedMethod(MethodHookParam param) {
                     if (param.args.length > 0 && param.args[0] instanceof Intent) {
                         Intent intent = (Intent) param.args[0];
-                        if("com.google.firebase.MESSAGING_EVENT".equals(intent.getAction())){
+                        if("com.google.firebase.MESSAGING_EVENT".equals(intent.getAction()) && isTrustedFCMIntent(intent, param.args)){
                             String target = intent.getComponent() == null ? intent.getPackage() : intent.getComponent().getPackageName();
                             if(targetIsAllow(target)){
                                 printLog("Disable MIUI Intercept: " + target, true);

@@ -1,13 +1,17 @@
 package com.kooritea.fcmfix.xposed;
 
 import android.app.PendingIntent;
+import android.content.Context;
+import android.os.Binder;
+import com.kooritea.fcmfix.core.PendingBroadcasts;
+import com.kooritea.fcmfix.core.PushOrigin;
+import com.kooritea.fcmfix.util.PushTrust;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
-import android.os.Build;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
@@ -20,14 +24,11 @@ import com.kooritea.fcmfix.libxposed.XposedHelpers;
 
 import com.kooritea.fcmfix.util.IceboxUtils;
 import com.kooritea.fcmfix.util.XposedUtils;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public class BroadcastFix extends XposedModule {
-    private static final ExecutorService iceboxExecutor = Executors.newCachedThreadPool();
-    private static final ConcurrentHashMap<String, AtomicBoolean> iceboxUnfreezeTasks = new ConcurrentHashMap<>();
+    private static final PendingBroadcasts<String> pendingBroadcasts = new PendingBroadcasts<>(
+            Executors.newFixedThreadPool(2), 256);
 
     public BroadcastFix(ClassLoader classLoader) {
         super(classLoader);
@@ -48,242 +49,101 @@ public class BroadcastFix extends XposedModule {
         }
     }
 
-    protected void startHookBroadcastIntentLocked(){
-        Method targetMethod = null;
-        int intent_args_index = -1;
-        int appOp_args_index = -1;
-
-        // === Path 0: broadcastIntentWithFeature (API 30+) ===
-        String[] possibleClasses = {
-            "com.android.server.am.BroadcastController",
-            "com.android.server.am.ActivityManagerService"
-        };
-        for (String className : possibleClasses) {
-            targetMethod = XposedUtils.tryFindMethodMostParam(classLoader, className, "broadcastIntentWithFeature");
-            if (targetMethod != null) {
-                printLog("[BroadcastFix] Found broadcastIntentWithFeature in " + className + " with " + targetMethod.getParameterCount() + " params");
-                break;
-            }
+    protected void startHookBroadcastIntentLocked() {
+        Method target = null;
+        String[] owners = {"com.android.server.am.BroadcastController", "com.android.server.am.ActivityManagerService"};
+        for (String owner : owners) {
+            target = XposedUtils.tryFindMethodMostParam(classLoader, owner, "broadcastIntentWithFeature");
+            if (target != null) break;
         }
-        
-        // === Path 1: Android 15+ BroadcastController (API >= 35) fallback ===
-        if(targetMethod == null && Build.VERSION.SDK_INT >= 35){
-            String[] controllerClasses = {
-                "com.android.server.am.BroadcastController",
-                "com.android.server.am.BroadcastQueueModernImpl"
-            };
-            for (String className : controllerClasses) {
-                targetMethod = XposedUtils.tryFindMethodMostParam(classLoader, className, "broadcastIntentLocked");
-                if (targetMethod != null) {
-                    printLog("[BroadcastFix] Found broadcastIntentLocked in " + className + " with " + targetMethod.getParameterCount() + " params");
-                    break;
-                }
-            }
-            if(targetMethod != null){
-                Parameter[] parameters = targetMethod.getParameters();
-                // Parameter name detection first
-                for(int i = 0; i < parameters.length; i++){
-                    if("appOp".equals(parameters[i].getName()) && parameters[i].getType() == int.class){
-                        appOp_args_index = i;
-                    }
-                    if("intent".equals(parameters[i].getName()) && parameters[i].getType() == Intent.class){
-                        intent_args_index = i;
-                    }
-                }
-                // Fallback: detect by type pattern
-                if(intent_args_index == -1){
-                    for(int i = 0; i < parameters.length; i++){
-                        if(parameters[i].getType() == Intent.class){
-                            intent_args_index = i;
-                            break;
-                        }
-                    }
-                }
-                if(appOp_args_index == -1){
-                    for(int i = parameters.length - 1; i >= 0; i--){
-                        if(parameters[i].getType() == int.class){
-                            appOp_args_index = i;
-                            break;
-                        }
-                    }
-                }
-                printLog("[BroadcastFix] Controller detection result: intent_idx=" + intent_args_index + ", appOp_idx=" + appOp_args_index);
-            } else {
-                printLog("[BroadcastFix] BroadcastController/BroadcastQueueModernImpl not found, falling back to AMS");
-            }
+        if (target == null) for (String owner : owners) {
+            target = XposedUtils.tryFindMethodMostParam(classLoader, owner, "broadcastIntentLocked");
+            if (target != null) break;
         }
-
-        // === Path 2: Fallback to ActivityManagerService (API 29-34, or API 35+ if Path 1 failed) ===
-        if(targetMethod == null){
-            targetMethod = XposedUtils.tryFindMethodMostParam(classLoader,"com.android.server.am.ActivityManagerService","broadcastIntentLocked");
-            if(targetMethod != null){
-                printLog("[BroadcastFix] Found method in ActivityManagerService with " + targetMethod.getParameterCount() + " params");
-                Parameter[] parameters = targetMethod.getParameters();
-                if(Build.VERSION.SDK_INT == Build.VERSION_CODES.Q){
-                    intent_args_index = 2;
-                    appOp_args_index = 9;
-                }else if(Build.VERSION.SDK_INT == Build.VERSION_CODES.R){
-                    intent_args_index = 3;
-                    appOp_args_index = 10;
-                }else if(Build.VERSION.SDK_INT == 31 || Build.VERSION.SDK_INT == 32){
-                    intent_args_index = 3;
-                    if(parameters.length > 11 && parameters[11].getType() == int.class){
-                        appOp_args_index = 11;
-                    } else if(parameters.length > 12 && parameters[12].getType() == int.class){
-                        appOp_args_index = 12;
-                    }
-                }else if(Build.VERSION.SDK_INT == 33){
-                    intent_args_index = 3;
-                    appOp_args_index = 12;
-                } else if(Build.VERSION.SDK_INT >= 34){
-                    intent_args_index = 3;
-                    if(parameters.length > 12 && parameters[12].getType() == int.class){
-                        appOp_args_index = 12;
-                    } else if(parameters.length > 13 && parameters[13].getType() == int.class){
-                        appOp_args_index = 13;
-                    }
-                }
-            } else {
-                printLog("[BroadcastFix] ActivityManagerService.broadcastIntentLocked not found either!");
-            }
+        if (target == null) throw new NoSuchMethodError("broadcast entry unavailable");
+        int intentIndex = -1;
+        for (int i = 0; i < target.getParameterCount(); i++) {
+            if (target.getParameterTypes()[i] == Intent.class) { intentIndex = i; break; }
         }
-
-        // Dynamic fallback for parameter indices
-        if(targetMethod != null){
-            Parameter[] parameters = targetMethod.getParameters();
-            if(intent_args_index == -1 || appOp_args_index == -1 ||
-               intent_args_index >= parameters.length || (appOp_args_index != -1 && appOp_args_index >= parameters.length) ||
-               parameters[intent_args_index].getType() != Intent.class || (appOp_args_index >= 0 && parameters[appOp_args_index].getType() != int.class)){
-                intent_args_index = -1;
-                appOp_args_index = -1;
-                for(int i = 0; i < parameters.length; i++){
-                    if("appOp".equals(parameters[i].getName()) && parameters[i].getType() == int.class){
-                        appOp_args_index = i;
-                    }
-                    if("intent".equals(parameters[i].getName()) && parameters[i].getType() == Intent.class){
-                        intent_args_index = i;
-                    }
-                }
-                if(intent_args_index == -1){
-                    for(int i = 0; i < parameters.length; i++){
-                        if(parameters[i].getType() == Intent.class){
-                            intent_args_index = i;
-                            break;
-                        }
-                    }
-                }
-                if(appOp_args_index == -1){
-                    for(int i = parameters.length - 1; i >= 0; i--){
-                        if(parameters[i].getType() == int.class){
-                            appOp_args_index = i;
-                            break;
-                        }
-                    }
-                }
-            }
-            printLog("[BroadcastFix] Detection result: intent_idx=" + intent_args_index + ", appOp_idx=" + appOp_args_index);
-        }
-
-        if(targetMethod != null && intent_args_index >= 0 &&
-           intent_args_index < targetMethod.getParameterCount() &&
-           targetMethod.getParameters()[intent_args_index].getType() == Intent.class &&
-           (appOp_args_index == -1 || (appOp_args_index < targetMethod.getParameterCount() && targetMethod.getParameters()[appOp_args_index].getType() == int.class))){
-            createBroadcastIntentLockedHooker(intent_args_index, appOp_args_index, targetMethod);
-        } else {
-            printLog("[BroadcastFix] broadcastIntent hook 位置查找失败，fcmfix将不会工作。targetMethod=" + (targetMethod != null ? targetMethod.getDeclaringClass().getName() : "null") + " intent_idx=" + intent_args_index + " appOp_idx=" + appOp_args_index);
-        }
+        if (intentIndex < 0) throw new NoSuchMethodError("broadcast Intent parameter unavailable");
+        createBroadcastHook(intentIndex, target);
     }
 
-    private String extractTargetPackage(Intent intent, Object[] args) {
-        if (intent == null) return null;
-        if (intent.getComponent() != null && intent.getComponent().getPackageName() != null) {
-            return intent.getComponent().getPackageName();
+    private static int entryUserId(Method method, Object[] args, int senderUid) {
+        Parameter[] parameters = method.getParameters();
+        for (int i = 0; i < parameters.length; i++) {
+            if ("userId".equals(parameters[i].getName()) && parameters[i].getType() == int.class) return (Integer) args[i];
         }
-        if (intent.getPackage() != null) {
-            return intent.getPackage();
-        }
-        return null;
+        // Only this verified binder entry contract ends with userId; never mutate it.
+        if ("broadcastIntentWithFeature".equals(method.getName()) && parameters.length > 0
+                && parameters[parameters.length - 1].getType() == int.class) return (Integer) args[parameters.length - 1];
+        return senderUid >= 10000 ? senderUid / 100000 : -1;
     }
 
-    protected void createBroadcastIntentLockedHooker(int intent_args_index, int appOp_args_index, Method method){
-        printLog("Android API: " + Build.VERSION.SDK_INT);
-        printLog("appOp_args_index: " + appOp_args_index);
-        printLog("intent_args_index: " + intent_args_index);
-        printLog("hook target: " + method.getDeclaringClass().getName());
-        final int finalIntent_args_index = intent_args_index;
-        final int finalAppOp_args_index = appOp_args_index;
-
-        XposedBridge.hookMethod(method,new XC_MethodHook() {
+    private void createBroadcastHook(int intentIndex, Method method) {
+        boolean binderEntry = "broadcastIntentWithFeature".equals(method.getName());
+        printLog("[BroadcastFix] Hook " + method + "; AppOps and userId are unchanged");
+        XposedBridge.hookMethod(method, new XC_MethodHook() {
             @Override
-            protected void beforeHookedMethod(MethodHookParam methodHookParam) {
-                if(methodHookParam.args[finalIntent_args_index] == null){
-                    return;
-                }
-                Intent intent = (Intent) methodHookParam.args[finalIntent_args_index];
-                if(isFCMIntent(intent)){
-                    String target = extractTargetPackage(intent, methodHookParam.args);
-                    boolean hasStoppedFlag = (intent.getFlags() & Intent.FLAG_INCLUDE_STOPPED_PACKAGES) != 0;
-                    printLog("[BroadcastFix] FCM Intent intercepted: action=" + intent.getAction() + ", target=" + target + ", hasStoppedFlag=" + hasStoppedFlag);
-
-                    if(!hasStoppedFlag){
-                        // If target is in allowList OR target is null (safeguard for FCM intents), add FLAG_INCLUDE_STOPPED_PACKAGES
-                        if(target == null || targetIsAllow(target)){
-                            if(finalAppOp_args_index >= 0) {
-                                int i = (Integer) methodHookParam.args[finalAppOp_args_index];
-                                if (i == -1) {
-                                    methodHookParam.args[finalAppOp_args_index] = 11;
-                                }
-                            }
-                            intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
-                            printLog("[BroadcastFix] Added FLAG_INCLUDE_STOPPED_PACKAGES for target=" + target, true);
-
-                            if (getBooleanConfig("includeIceBoxDisableApp",false) && target != null && !IceboxUtils.isAppEnabled(context, target)) {
-                                printLog("Waiting for IceBox to activate the app: " + target, true);
-                                methodHookParam.setResult(false);
-                                final String finalTarget = target;
-                                AtomicBoolean isUnfreezing = iceboxUnfreezeTasks.computeIfAbsent(finalTarget, k -> new AtomicBoolean(false));
-                                if (isUnfreezing.compareAndSet(false, true)) {
-                                    iceboxExecutor.submit(() -> {
-                                        try {
-                                            IceboxUtils.activeApp(context, finalTarget);
-                                            for (int i1 = 0; i1 < 300; i1++) {
-                                                if (!IceboxUtils.isAppEnabled(context, finalTarget)) {
-                                                    try {
-                                                        Thread.sleep(100);
-                                                    } catch (Throwable e) {
-                                                        printLog("Send Forced Start Broadcast Error: " + finalTarget + " " + e.getMessage(), true);
-                                                    }
-                                                } else {
-                                                    break;
-                                                }
-                                            }
-                                            if(IceboxUtils.isAppEnabled(context, finalTarget)){
-                                                printLog("Send Forced Start Broadcast: " + finalTarget, true);
-                                            }else{
-                                                printLog("Waiting for IceBox to activate the app timed out: " + finalTarget, true);
-                                            }
-                                            XposedBridge.invokeOriginalMethod(methodHookParam.method, methodHookParam.thisObject, methodHookParam.args);
-                                        } catch (Throwable e) {
-                                            printLog("Send Forced Start Broadcast Error: " + finalTarget + " " + e.getMessage(), true);
-                                        } finally {
-                                            isUnfreezing.set(false);
-                                        }
-                                    });
-                                }
-                            }else{
-                                printLog("Send Forced Start Broadcast: " + target, true);
-                            }
-                            // cos15/16 unfreeze
-                            if (target != null) {
-                                OplusProxyFix.unfreeze(target);
-                            }
-                        } else {
-                            printLog("[BroadcastFix] Target " + target + " is NOT in allowList (allowList size: " + (allowList != null ? allowList.size() : 0) + ")");
-                        }
+            protected void beforeHookedMethod(MethodHookParam param) {
+                Intent intent = (Intent) param.args[intentIndex];
+                String target = PushTrust.targetPackage(intent);
+                int senderUid = PushTrust.entrySenderUid(param.args, binderEntry);
+                boolean trusted = isFCMIntent(intent) && PushTrust.isGmsSender(context, senderUid);
+                int userId = entryUserId(method, param.args, senderUid);
+                PushOrigin.Scope scope = PushOrigin.enter(trusted, target, intent == null ? null : intent.getAction(), senderUid, userId);
+                param.invocationState = scope;
+                try {
+                if (!trusted || !targetIsAllow(target)) return;
+                intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+                if (userId >= 0 && getBooleanConfig("includeIceBoxDisableApp", false)) {
+                    Context targetContext = PushTrust.userContext(context, userId);
+                    if (!IceboxUtils.isAppEnabled(targetContext, target) && method.getReturnType() == int.class) {
+                        // Only binder entries own their locking and re-check permissions on replay.
+                        if (binderEntry && deferBroadcast(param, intentIndex, target, userId, targetContext, scope)) return;
+                        printLog("[BroadcastFix] Deferred IceBox replay unavailable for this entry; preserve original delivery");
                     }
                 }
+                if (userId >= 0) OplusProxyFix.unfreeze(target, userId);
+                } catch (Throwable failure) {
+                    PushOrigin.leave(scope);
+                    param.invocationState = null;
+                    printLog("[BroadcastFix] preserve original delivery after Hook error: " + failure);
+                }
+            }
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                PushOrigin.leave((PushOrigin.Scope) param.invocationState);
             }
         });
+    }
+
+    private boolean deferBroadcast(XC_MethodHook.MethodHookParam param, int intentIndex, String target,
+            int userId, Context targetContext, PushOrigin.Scope origin) {
+        Object[] args = param.args.clone();
+        args[intentIndex] = new Intent((Intent) args[intentIndex]);
+        long senderIdentity = Binder.clearCallingIdentity();
+        Binder.restoreCallingIdentity(senderIdentity);
+        boolean accepted = pendingBroadcasts.submit(userId + ":" + target, () -> {
+            IceboxUtils.activeApp(targetContext, target, userId);
+            for (int i = 0; i < 300; i++) {
+                if (IceboxUtils.isAppEnabled(targetContext, target)) return true;
+                Thread.sleep(100);
+            }
+            return false;
+        }, () -> {
+            long workerIdentity = Binder.clearCallingIdentity();
+            PushOrigin.Scope replayScope = PushOrigin.enter(true, target, ((Intent) args[intentIndex]).getAction(), origin.senderUid, userId);
+            try {
+                Binder.restoreCallingIdentity(senderIdentity);
+                // Replay the binder entry: its original permission checks and service locks still run.
+                XposedBridge.invokeOriginalMethod(param.method, param.thisObject, args);
+            } catch (Throwable error) { throw new IllegalStateException("deferred broadcast failed", error); }
+            finally { Binder.restoreCallingIdentity(workerIdentity); PushOrigin.leave(replayScope); }
+        }, error -> printLog("[IceBox] delivery failed for " + userId + ":" + target + ": " + error));
+        if (accepted) param.setResult(0); // ActivityManager.BROADCAST_SUCCESS, an int.
+        else printLog("[IceBox] queue full/unavailable; preserve original delivery for " + target);
+        return accepted;
     }
 
     protected void startHookScheduleResultTo(){
@@ -331,53 +191,30 @@ public class BroadcastFix extends XposedModule {
     }
 
     protected void startHookBroadcastSkipPolicy() {
-        try {
-            Class<?> policyClass = XposedHelpers.findClassIfExists("com.android.server.am.BroadcastSkipPolicy", classLoader);
-            if (policyClass != null) {
-                for (Method m : policyClass.getDeclaredMethods()) {
-                    if ("shouldSkipMessage".equals(m.getName()) || "shouldSkip".equals(m.getName())) {
-                        XposedBridge.hookMethod(m, new XC_MethodHook() {
-                            @Override
-                            protected void beforeHookedMethod(MethodHookParam param) {
-                                Intent intent = null;
-                                for (Object arg : param.args) {
-                                    if (arg instanceof Intent) {
-                                        intent = (Intent) arg;
-                                        break;
-                                    } else if (arg != null) {
-                                        try {
-                                            Object obj = XposedHelpers.getObjectField(arg, "intent");
-                                            if (obj instanceof Intent) {
-                                                intent = (Intent) obj;
-                                                break;
-                                            }
-                                        } catch (Throwable ignored) {}
-                                    }
-                                }
-                                if (intent != null && isFCMIntent(intent)) {
-                                    String target = extractTargetPackage(intent, param.args);
-                                    if (target == null || targetIsAllow(target)) {
-                                        printLog("[BroadcastFix] BroadcastSkipPolicy bypassed for " + target, true);
-                                        intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
-                                        if (target != null) {
-                                            OplusProxyFix.unfreeze(target);
-                                        }
-                                        // Check return type, it might be String (skip reason) or boolean (should skip)
-                                        if (m.getReturnType() == boolean.class) {
-                                            param.setResult(false);
-                                        } else if (m.getReturnType() == String.class) {
-                                            param.setResult(null); // null means don't skip
-                                        }
-                                    }
-                                }
-                            }
-                        });
-                        printLog("[BroadcastFix] Hooked BroadcastSkipPolicy." + m.getName());
+        Class<?> policy = XposedHelpers.findClassIfExists("com.android.server.am.BroadcastSkipPolicy", classLoader);
+        if (policy == null) return;
+        for (Method method : policy.getDeclaredMethods()) {
+            if (!"shouldSkipMessage".equals(method.getName()) && !"shouldSkip".equals(method.getName())) continue;
+            XposedBridge.hookMethod(method, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    Intent intent = null;
+                    for (Object arg : param.args) {
+                        if (arg instanceof Intent) { intent = (Intent) arg; break; }
+                        if (arg != null && arg.getClass().getName().equals("com.android.server.am.BroadcastRecord")) {
+                            Object value = XposedHelpers.getObjectField(arg, "intent");
+                            if (value instanceof Intent) { intent = (Intent) value; break; }
+                        }
                     }
+                    String target = PushTrust.targetPackage(intent);
+                    if (targetIsAllow(target) && isTrustedFCMIntent(intent, param.args)) {
+                        intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+                        int userId = PushTrust.targetUserId(param.args);
+                        if (userId >= 0) OplusProxyFix.unfreeze(target, userId);
+                    }
+                    // ALWAYS let the original policy decide: permissions, exports, IFW, and AppOps.
                 }
-            }
-        } catch (Throwable e) {
-            printLog("hook error BroadcastSkipPolicy: " + e.getMessage());
+            });
         }
     }
 

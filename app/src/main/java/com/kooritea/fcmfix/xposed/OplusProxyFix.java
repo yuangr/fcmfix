@@ -1,6 +1,8 @@
 package com.kooritea.fcmfix.xposed;
 
 import android.content.Intent;
+import android.content.Context;
+import com.kooritea.fcmfix.util.PushTrust;
 import android.content.pm.PackageManager;
 import android.os.WorkSource;
 
@@ -117,32 +119,11 @@ public class OplusProxyFix extends XposedModule {
                                         }
                                     }
 
-                                    // Fallback: scan args for action string
-                                    if (action == null) {
-                                        for (Object arg : param.args) {
-                                            if (arg instanceof String && isFCMAction((String) arg)) {
-                                                action = (String) arg;
-                                                break;
-                                            }
-                                        }
-                                    }
-
-                                    // Fallback: scan args for package name
-                                    if (pkgName == null) {
-                                        for (Object arg : param.args) {
-                                            if (arg instanceof String && targetIsAllow((String) arg)) {
-                                                pkgName = (String) arg;
-                                                break;
-                                            }
-                                        }
-                                    }
-
-                                    // Check FCM by action OR by Intent extras
-                                    boolean isFcm = isFCMAction(action) || (foundIntent != null && isFCMIntent(foundIntent));
-                                    if (isFcm && (pkgName == null || targetIsAllow(pkgName))) {
+                                    if (foundIntent != null && pkgName != null && targetIsAllow(pkgName)
+                                            && isTrustedFCMIntent(foundIntent, param.args)) {
                                         printLog("[OplusProxyFix] shouldProxy bypass: pkg=" + pkgName + ", action=" + action, true);
                                         if (pkgName != null) {
-                                            unfreeze(pkgName);
+                                            unfreeze(pkgName, PushTrust.targetUserId(param.args));
                                         }
                                         if (foundIntent != null) {
                                             foundIntent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
@@ -308,12 +289,13 @@ public class OplusProxyFix extends XposedModule {
 
     // ==================== UID resolution ====================
 
-    private static int getTargetUidFromPackageName(String packageName) {
+    private static int getTargetUidFromPackageName(String packageName, int userId) {
         if (packageName != null && context != null) {
             try {
-                PackageManager pm = context.getPackageManager();
-                return pm.getPackageUid(packageName, 0);
-            } catch (PackageManager.NameNotFoundException e) {
+                PackageManager pm = PushTrust.userContext(context, userId).getPackageManager();
+                int uid = pm.getPackageUid(packageName, 0);
+                return uid / 100000 == userId ? uid : -1;
+            } catch (Exception e) {
                 printLog("[OplusProxyFix] Package not found: " + packageName);
             }
         }
@@ -322,8 +304,9 @@ public class OplusProxyFix extends XposedModule {
 
     // ==================== Multi-path unfreeze ====================
 
-    public static void unfreeze(String target) {
-        int uid = getTargetUidFromPackageName(target);
+    public static void unfreeze(String target, int userId) {
+        if (userId < 0) return;
+        int uid = getTargetUidFromPackageName(target, userId);
         if (uid < 0) {
             printLog("[OplusProxyFix] unfreeze skipped: cannot resolve UID for " + target);
             return;
@@ -333,7 +316,7 @@ public class OplusProxyFix extends XposedModule {
         if (tryUnfreezeViaWakeLock(uid, target)) return;
 
         // Path B: OplusHansManager unfreeze methods
-        if (tryUnfreezeViaHansManager(uid, target)) return;
+        if (tryUnfreezeViaHansManager(uid, target, userId)) return;
 
         printLog("[OplusProxyFix] All unfreeze paths failed for " + target + " (uid=" + uid + ")");
     }
@@ -392,7 +375,7 @@ public class OplusProxyFix extends XposedModule {
         }
     }
 
-    private static boolean tryUnfreezeViaHansManager(int uid, String target) {
+    private static boolean tryUnfreezeViaHansManager(int uid, String target, int userId) {
         Object hans = getHansManagerInstance();
         if (hans == null) {
             printLog("[OplusProxyFix] HansManager instance unavailable");
@@ -419,7 +402,7 @@ public class OplusProxyFix extends XposedModule {
 
             // Try (String pkg, int userId, String reason)
             try {
-                XposedHelpers.callMethod(hans, methodName, target, 0, "FCMFix");
+                XposedHelpers.callMethod(hans, methodName, target, userId, "FCMFix");
                 printLog("[OplusProxyFix] Hans." + methodName + "(pkg, userId, reason) success: " + target, true);
                 return true;
             } catch (Throwable ignored) {}

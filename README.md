@@ -1,6 +1,6 @@
 # fcmfix (Android 10-16)
 
-[![Android CI](https://github.com/kooritea/fcmfix/workflows/Android%20CI/badge.svg)](https://github.com/kooritea/fcmfix/actions)
+[![Android CI](https://github.com/yuangr/fcmfix/actions/workflows/android.yml/badge.svg)](https://github.com/yuangr/fcmfix/actions/workflows/android.yml)
 
 让 FCM/GCM 唤醒未启动的应用进行发送通知。
 
@@ -20,6 +20,26 @@
 | **ColorOS / OxygenOS** | 15 / 16 | 主要适配目标 |
 | **MIUI / HyperOS** | 12 / 13 / HyperOS | 需勾选”电量和性能”作用域 |
 | **原生 Android** | 10 - 16 | 可能需要手动授予自启动权限 |
+
+### v1.9 — 广播校验与并发修复
+
+- 广播放行要求显式目标在允许列表内，并通过系统记录的 Google Play Services UID 验证来源；伪造 FCM action 或 extras 不再获得放行。
+- Firebase 接收器向本应用的 `MESSAGING_EVENT` 服务转发允许验证本应用 UID，不能借此启动其他应用。
+- `BroadcastSkipPolicy` 保留原有的权限、组件导出、Intent 防火墙和 AppOps 检查，仅调整已停止应用的接收标志及厂商冻结状态。
+- 不再猜测或改写广播参数中的 AppOps 和 userId；解冻使用目标用户。
+- 每个 Hook 注册只执行自己的回调，服务重建不会重复注册心跳 Hook。
+- IceBox 合并同一用户、同一应用的解冻任务，每条消息分别排队回放；队列满或执行器拒绝时继续原始广播调用。
+- 每个心跳计时器只保留一个待执行的重连检查，更新超时会取消并移除旧任务。
+- 配置使用不可变快照；读取期间收到更新会再次读取，广播线程不再等待配置加载。
+
+### GitHub 编译
+
+推送到 `main`、`codex/**` 分支或向 `main` 提交 PR，会运行 32 项 JVM 回归测试并生成 Release APK。打开仓库 **Actions → Android CI → 对应运行 → Artifacts → unsigned-apk** 下载。
+
+- 默认构建产物未签名，安装前需要使用原版本相同的密钥签名以覆盖升级。
+- 发布：在 `main` 分支手动运行工作流，勾选 `publish`。需要仓库已配置 `SIGNINGKEYBASE64`、`ALIAS`、`KEYSTOREPASSWORD`、`KEYPASSWORD` 四项签名 secrets；测试通过后签名并发布到当前仓库 Release。
+- 工作流不会向上游或 Xposed 模块仓库发布。
+- 完整任务是 `testDebugUnitTest assembleRelease`，运行环境为 JDK 17、Android SDK / Build Tools 36；本项目维护可以完全通过 GitHub 构建，无需本机安装这些工具。
 
 ### v1.7 — 安全加固与稳定性修复
 
@@ -54,6 +74,8 @@ FCM 是 Google 维护的一条介于 Google 服务器与 GMS 应用之间的推�
 
 - 非 MIUI/HyperOS/OxygenOS/ColorOS 系统可能需要手动授予目标应用自启动权限，以及电池优化设为”不优化”
 - GMS 版本更新后，`ReconnectManagerFix` 的心跳 Hook 点可能需要重新探测
+- IceBox 异步回放要求系统提供 `broadcastIntentWithFeature` Binder 入口；仅有私有 `broadcastIntentLocked` 的旧系统保留原始广播行为，不能保证唤醒已禁用应用。
+- JVM 测试覆盖权限策略、参数保持、消息排队、Hook 和定时任务并发；厂商真实冻结/推送行为仍需对应手机验证。
 
 ### 鸣谢
 

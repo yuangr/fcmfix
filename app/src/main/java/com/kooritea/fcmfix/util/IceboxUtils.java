@@ -8,7 +8,6 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.Process;
 import android.util.Log;
 
 import androidx.annotation.RequiresPermission;
@@ -53,12 +52,11 @@ public class IceboxUtils extends BroadcastReceiver {
         } catch (Throwable e) {
             Log.e(TAG, "[icebox] " + packageName + " " + e.getMessage());
         }
-        return true;
+        return false;
     }
 
     @RequiresPermission(SDK_PERMISSION)
-    public static void enableApp(Context context, boolean enable, String... packageNames) {
-        int userHandle = android.os.Process.myUid() / 100000;
+    public static void enableApp(Context context, boolean enable, int userHandle, String... packageNames) {
         Bundle extra = new Bundle();
         extra.putParcelable("authorize", queryPermission(context));
         extra.putStringArray("package_names", packageNames);
@@ -67,7 +65,7 @@ public class IceboxUtils extends BroadcastReceiver {
         context.getContentResolver().call(PERMISSION_URI, "set_enable", null, extra);
     }
 
-    public static void activeApp(Context context, String pkg) {
+    public static void activeApp(Context context, String pkg, int userId) {
         try {
             if (!isIceBoxWorking) {
                 if (ContextCompat.checkSelfPermission(context, SDK_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
@@ -81,7 +79,7 @@ public class IceboxUtils extends BroadcastReceiver {
                 isIceBoxWorking = true;
             }
             if (!isAppEnabled(context, pkg)) {
-                enableApp(context, true, pkg);
+                enableApp(context, true, userId, pkg);
                 Log.i(TAG, "[icebox] successfully enable " + pkg);
             } else {
                 Log.e(TAG, "[icebox] has been enabled " + pkg);

@@ -12,7 +12,6 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.UserManager;
-import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
@@ -21,11 +20,11 @@ import com.kooritea.fcmfix.libxposed.XC_MethodHook;
 import com.kooritea.fcmfix.libxposed.XposedBridge;
 import com.kooritea.fcmfix.libxposed.XposedHelpers;
 
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.concurrent.ConcurrentHashMap;
+import com.kooritea.fcmfix.core.ConfigSnapshot;
+import com.kooritea.fcmfix.core.CoalescingReloader;
+import java.util.concurrent.Executors;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.HashSet;
 import java.util.Set;
 
 import static android.content.Context.NOTIFICATION_SERVICE;
@@ -36,14 +35,16 @@ public abstract class XposedModule {
     protected final ClassLoader classLoader;
     public static volatile Set<String> allowList = null;
     static final String TAG = "fcmfix";
-    private static final ConcurrentHashMap<String, Object> config = new ConcurrentHashMap<>();
+    private static volatile ConfigSnapshot config = ConfigSnapshot.EMPTY;
+    private static final CoalescingReloader reloader = new CoalescingReloader(
+            Executors.newSingleThreadExecutor(), XposedModule::loadConfiguration,
+            error -> printLog("配置读取失败，保留上一份配置: " + error));
 
     @SuppressLint("StaticFieldLeak")
     protected static Context context = null;
     private static final CopyOnWriteArrayList<XposedModule> instances = new CopyOnWriteArrayList<>();
     private static Boolean isInitReceiver = false;
     public static volatile Boolean isBootComplete = true; // Default true, no need to block for 30s
-    private static Thread loadConfigThread = null;
 
     protected XposedModule(final ClassLoader classLoader) {
         this.classLoader = classLoader;
@@ -84,6 +85,7 @@ public abstract class XposedModule {
     private static void callAllOnCanReadConfig() {
         initReceiver();
         isBootComplete = true;
+        onUpdateConfig();
         for (XposedModule instance : instances) {
             try {
                 instance.onCanReadConfig();
@@ -143,71 +145,26 @@ public abstract class XposedModule {
     };
 
     protected boolean targetIsAllow(String packageName) {
-        if (packageName == null || packageName.isEmpty()) return false;
-        if (config.get("init") == null) {
-            this.checkUserDeviceUnlockAndUpdateConfig();
-            try {
-                if (loadConfigThread != null) loadConfigThread.join(2000);
-            } catch (InterruptedException ignored) {}
-        }
-        if ("com.kooritea.fcmfix".equals(packageName)) {
-            return true;
-        }
-        if (allowList != null) {
-            return allowList.contains(packageName);
-        }
-        return false;
+        ConfigSnapshot snapshot = config;
+        if (!snapshot.loaded) checkUserDeviceUnlockAndUpdateConfig();
+        return packageName != null && snapshot.allowList.contains(packageName);
     }
 
     protected boolean getBooleanConfig(String key, boolean defaultValue) {
-        if (config.get("init") == null) {
-            this.checkUserDeviceUnlockAndUpdateConfig();
-            try {
-                if (loadConfigThread != null) loadConfigThread.join(2000);
-            } catch (InterruptedException ignored) {}
-        }
-        if (config.get("init") == null) {
-            return defaultValue;
-        }
-        Object value = config.get(key);
-        return value == null ? defaultValue : (Boolean) value;
+        ConfigSnapshot snapshot = config;
+        if (!snapshot.loaded) checkUserDeviceUnlockAndUpdateConfig();
+        return snapshot.getBoolean(key, defaultValue);
     }
 
-    protected static synchronized void onUpdateConfig() {
-        if (loadConfigThread == null) {
-            loadConfigThread = new Thread() {
-                @Override
-                public void run() {
-                    super.run();
-                    try {
-                        SharedPreferences remotePreferences = XposedBridge.getRemotePreferences("config");
-                        if (remotePreferences == null) {
-                            throw new IllegalStateException("remotePreferences 不可用");
-                        }
-                        Set<String> prefSet = remotePreferences.getStringSet("allowList", allowList == null ? new HashSet<>() : allowList);
-                        Set<String> newAllowList = ConcurrentHashMap.newKeySet();
-                        if (prefSet != null) newAllowList.addAll(prefSet);
-                        allowList = newAllowList;
-                        if (allowList != null && "android".equals(getSelfPackageName())) {
-                            printLog("[Modern Xposed API]onUpdateConfig allowList size: " + allowList.size());
-                        }
-                        synchronized (config) {
-                            config.put("disableAutoCleanNotification", remotePreferences.getBoolean("disableAutoCleanNotification", false));
-                            config.put("includeIceBoxDisableApp", remotePreferences.getBoolean("includeIceBoxDisableApp", false));
-                            config.put("noResponseNotification", remotePreferences.getBoolean("noResponseNotification", false));
-                            config.put("init", true);
-                        }
-                    } catch (Throwable e) {
-                        printLog("通过现代Xposed API读取配置失败: " + e.getMessage());
-                    } finally {
-                        synchronized (XposedModule.class) {
-                            loadConfigThread = null;
-                        }
-                    }
-                }
-            };
-            loadConfigThread.start();
-        }
+    protected static void onUpdateConfig() { reloader.request(); }
+
+    private static void loadConfiguration() {
+        SharedPreferences remote = XposedBridge.getRemotePreferences("config");
+        if (remote == null) throw new IllegalStateException("remotePreferences 不可用");
+        ConfigSnapshot next = ConfigSnapshot.from(new HashMap<>(remote.getAll()));
+        config = next;
+        allowList = next.allowList; // Read-only compatibility view for diagnostics.
+        printLog("配置已更新，allowList size: " + next.allowList.size());
     }
 
     private static void onUninstallFcmfix() {
@@ -300,31 +257,10 @@ public abstract class XposedModule {
         }
     }
 
-    protected boolean isFCMAction(String action) {
-        return action != null && (action.endsWith(".android.c2dm.intent.RECEIVE") ||
-                "com.google.firebase.MESSAGING_EVENT".equals(action) ||
-                "com.google.firebase.INSTANCE_ID_EVENT".equals(action) ||
-                "com.google.android.c2dm.intent.REGISTRATION".equals(action) ||
-                "com.google.android.intent.action.GCM_NOTIFICATION".equals(action));
-    }
-
-    protected boolean isFCMIntent(Intent intent) {
-        if (intent == null) return false;
-        String action = intent.getAction();
-        if (isFCMAction(action)) return true;
-        try {
-            if (intent.getExtras() != null) {
-                // Strong signal: unique FCM keys
-                if (intent.hasExtra("google.message_id") || intent.hasExtra("gcm.message_id")) {
-                    return true;
-                }
-                // Weaker signal: require both "from" and "collapse_key" together
-                if (intent.hasExtra("from") && intent.hasExtra("collapse_key")) {
-                    return true;
-                }
-            }
-        } catch (Throwable ignored) {}
-        return false;
+    protected boolean isFCMAction(String action) { return com.kooritea.fcmfix.util.PushTrust.isFcmAction(action); }
+    protected boolean isFCMIntent(Intent intent) { return com.kooritea.fcmfix.util.PushTrust.looksLikeFcm(intent); }
+    protected boolean isTrustedFCMIntent(Intent intent, Object[] args) {
+        return com.kooritea.fcmfix.util.PushTrust.isTrustedFcm(context, intent, args);
     }
 
     protected static String getSelfPackageName() {

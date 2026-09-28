@@ -3,13 +3,14 @@ apply plugin: 'com.android.application'
 android {
     namespace = "com.kooritea.fcmfix"
     compileSdkVersion 36
+    buildToolsVersion "36.0.0"
 
     defaultConfig {
         applicationId "com.kooritea.fcmfix"
         minSdkVersion 29
         targetSdkVersion 36
-        versionCode 180
-        versionName "v1.8"
+        versionCode 190
+        versionName "v1.9"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -25,6 +26,8 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    testOptions { unitTests.returnDefaultValues = true }
+
     lint {
         checkReleaseBuilds = false
     }
@@ -32,6 +35,9 @@ android {
 
 dependencies {
     compileOnly 'io.github.libxposed:api:101.0.1'
+    testImplementation 'io.github.libxposed:api:101.0.1'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.mockito:mockito-inline:4.11.0'
     implementation 'io.github.libxposed:interface:101.0.0'
     implementation 'io.github.libxposed:service:101.0.0'
     implementation fileTree(dir: "libs", include: ["*.jar"])

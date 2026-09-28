@@ -8,6 +8,7 @@ public abstract class XC_MethodHook {
         public Member method;
         public Object thisObject;
         public Object[] args;
+        public Object invocationState;
 
         private Object result;
         private Throwable throwable;
