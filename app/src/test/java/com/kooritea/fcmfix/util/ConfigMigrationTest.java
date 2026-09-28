@@ -30,7 +30,7 @@ public class ConfigMigrationTest {
         verify(editor).commit();
     }
     @Test public void existingRemoteIncludingDeliberatelyEmptyAllowListAlwaysWins() {
-        when(remote.getAll()).thenReturn(Collections.singletonMap("allowList",Collections.emptySet()));
+        doReturn(Collections.singletonMap("allowList",Collections.emptySet())).when(remote).getAll();
         assertEquals(ConfigMigration.Result.NONE,ConfigMigration.seedEmptyRemote(remote,local)); verifyNoInteractions(editor);
     }
     @Test public void absentLocalCacheNeverCreatesConfiguration() {
