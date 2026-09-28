@@ -47,6 +47,7 @@ import java.util.Locale;
 import java.util.Set;
 
 import com.kooritea.fcmfix.util.IceboxUtils;
+import com.kooritea.fcmfix.util.ConfigMigration;
 
 public class MainActivity extends AppCompatActivity {
     private AppListAdapter appListAdapter;
@@ -116,6 +117,21 @@ public class MainActivity extends AppCompatActivity {
         ensureDefaultConfigValues();
         SharedPreferences pref = getRemotePreferencesOrNull();
         if (pref == null) {
+            return;
+        }
+        try {
+            ConfigMigration.Result migration = ConfigMigration.seedEmptyRemote(pref,
+                    getSharedPreferences(LOCAL_PREFS_NAME, Context.MODE_PRIVATE));
+            if (migration == ConfigMigration.Result.FAILED) {
+                Log.e("migrateLocalConfig", "Remote commit failed; retain local configuration");
+                return;
+            }
+            if (migration == ConfigMigration.Result.IMPORTED) {
+                Log.i("migrateLocalConfig", "Restored local configuration to empty framework preferences");
+                sendBroadcast(new Intent("com.kooritea.fcmfix.update.config"));
+            }
+        } catch (RuntimeException failure) {
+            Log.e("migrateLocalConfig", "Retain local configuration", failure);
             return;
         }
         this.allowList.clear();
