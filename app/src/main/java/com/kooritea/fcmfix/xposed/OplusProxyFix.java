@@ -42,6 +42,7 @@ public class OplusProxyFix extends XposedModule {
     public OplusProxyFix(ClassLoader classLoader) {
         super(classLoader);
         s_systemClassLoader = classLoader;
+        PushProcessingWindow.installHansHook(classLoader, this);
         try {
             this.startHookOplusProxyWakeLock();
             this.startHookOplusHansManager();
