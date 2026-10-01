@@ -104,7 +104,13 @@ public class BroadcastFix extends XposedModule {
                         printLog("[BroadcastFix] Deferred IceBox replay unavailable for this entry; preserve original delivery");
                     }
                 }
-                if (userId >= 0) OplusProxyFix.unfreeze(target, userId);
+                if (userId >= 0) {
+                    if ("com.google.android.c2dm.intent.RECEIVE".equals(intent.getAction())
+                            && getBooleanConfig("pushProcessingWindow", true)) {
+                        PushProcessingWindow.schedule(context, classLoader, target, userId);
+                    }
+                    OplusProxyFix.unfreeze(target, userId);
+                }
                 } catch (Throwable failure) {
                     PushOrigin.leave(scope);
                     param.invocationState = null;

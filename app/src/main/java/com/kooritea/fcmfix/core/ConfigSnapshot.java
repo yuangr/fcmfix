@@ -7,19 +7,21 @@ import java.util.Set;
 
 /** One immutable configuration publication for every Hook reader. */
 public final class ConfigSnapshot {
-    public static final ConfigSnapshot EMPTY = new ConfigSnapshot(false, Collections.emptySet(), false, false, false);
+    public static final ConfigSnapshot EMPTY = new ConfigSnapshot(false, Collections.emptySet(), false, false, false, true);
     public final boolean loaded;
     public final Set<String> allowList;
     public final boolean disableAutoCleanNotification;
     public final boolean includeIceBoxDisableApp;
     public final boolean noResponseNotification;
+    public final boolean pushProcessingWindow;
 
-    private ConfigSnapshot(boolean loaded, Set<String> apps, boolean keep, boolean icebox, boolean notify) {
+    private ConfigSnapshot(boolean loaded, Set<String> apps, boolean keep, boolean icebox, boolean notify, boolean window) {
         this.loaded = loaded;
         this.allowList = Collections.unmodifiableSet(new HashSet<>(apps));
         disableAutoCleanNotification = keep;
         includeIceBoxDisableApp = icebox;
         noResponseNotification = notify;
+        pushProcessingWindow = window;
     }
 
     public static ConfigSnapshot from(Map<String, ?> values) {
@@ -27,7 +29,7 @@ public final class ConfigSnapshot {
         Object raw = values.get("allowList");
         if (raw instanceof Set<?>) for (Object item : (Set<?>) raw) if (item instanceof String) apps.add((String) item);
         return new ConfigSnapshot(true, apps, Boolean.TRUE.equals(values.get("disableAutoCleanNotification")),
-                Boolean.TRUE.equals(values.get("includeIceBoxDisableApp")), Boolean.TRUE.equals(values.get("noResponseNotification")));
+                Boolean.TRUE.equals(values.get("includeIceBoxDisableApp")), Boolean.TRUE.equals(values.get("noResponseNotification")), !Boolean.FALSE.equals(values.get("pushProcessingWindow")));
     }
 
     public boolean getBoolean(String key, boolean fallback) {
@@ -36,6 +38,7 @@ public final class ConfigSnapshot {
             case "disableAutoCleanNotification": return disableAutoCleanNotification;
             case "includeIceBoxDisableApp": return includeIceBoxDisableApp;
             case "noResponseNotification": return noResponseNotification;
+            case "pushProcessingWindow": return pushProcessingWindow;
             default: return fallback;
         }
     }

@@ -30,6 +30,11 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import io.github.libxposed.service.XposedService;
 import io.github.libxposed.service.XposedServiceHelper;
@@ -141,6 +146,7 @@ public class MainActivity extends AppCompatActivity {
             this.config.put("disableAutoCleanNotification", pref.getBoolean("disableAutoCleanNotification", false));
             this.config.put("includeIceBoxDisableApp", pref.getBoolean("includeIceBoxDisableApp", false));
             this.config.put("noResponseNotification", pref.getBoolean("noResponseNotification", false));
+            this.config.put("pushProcessingWindow", pref.getBoolean("pushProcessingWindow", true));
         } catch (JSONException e) {
             Log.e("loadRemoteConfig", e.toString());
         }
@@ -156,6 +162,7 @@ public class MainActivity extends AppCompatActivity {
                     .putBoolean("disableAutoCleanNotification", this.config.optBoolean("disableAutoCleanNotification", false))
                     .putBoolean("includeIceBoxDisableApp", this.config.optBoolean("includeIceBoxDisableApp", false))
                     .putBoolean("noResponseNotification", this.config.optBoolean("noResponseNotification", false))
+                    .putBoolean("pushProcessingWindow", this.config.optBoolean("pushProcessingWindow", true))
                     .putBoolean("hasLocalCache", true)
                     .apply();
         } catch (Throwable e) {
@@ -175,6 +182,7 @@ public class MainActivity extends AppCompatActivity {
             this.config.put("disableAutoCleanNotification", localPrefs.getBoolean("disableAutoCleanNotification", false));
             this.config.put("includeIceBoxDisableApp", localPrefs.getBoolean("includeIceBoxDisableApp", false));
             this.config.put("noResponseNotification", localPrefs.getBoolean("noResponseNotification", false));
+            this.config.put("pushProcessingWindow", localPrefs.getBoolean("pushProcessingWindow", true));
             Log.d("loadConfigFromLocal", "Loaded local cache, allowList size: " + this.allowList.size());
         } catch (Throwable e) {
             Log.e("loadConfigFromLocal", e.toString());
@@ -347,7 +355,20 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_main);
+        Toolbar toolbar = findViewById(R.id.toolbar);
+        setSupportActionBar(toolbar);
+        View root = findViewById(R.id.main_root);
+        ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
+            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()
+                    | WindowInsetsCompat.Type.displayCutout());
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return WindowInsetsCompat.CONSUMED;
+        });
+        WindowCompat.getInsetsController(getWindow(), root).setAppearanceLightStatusBars(false);
+        WindowCompat.getInsetsController(getWindow(), root).setAppearanceLightNavigationBars(true);
+        ViewCompat.requestApplyInsets(root);
         ensureDefaultConfigValues();
         loadConfigFromLocal();
         RecyclerView recyclerView = findViewById(R.id.recycler_view);
@@ -398,6 +419,7 @@ public class MainActivity extends AppCompatActivity {
                     .putBoolean("disableAutoCleanNotification", this.config.optBoolean("disableAutoCleanNotification", false))
                     .putBoolean("includeIceBoxDisableApp", this.config.optBoolean("includeIceBoxDisableApp", false))
                     .putBoolean("noResponseNotification", this.config.optBoolean("noResponseNotification", false))
+                    .putBoolean("pushProcessingWindow", this.config.optBoolean("pushProcessingWindow", true))
                     .commit();
             if (!saved) {
                 throw new IllegalStateException("配置写入失败");
@@ -419,6 +441,8 @@ public class MainActivity extends AppCompatActivity {
         menu.add("允许唤醒被冰箱冻结的应用").setCheckable(true);
 
 //        menu.add("目标无响应时代发提示通知").setCheckable(true);
+
+        menu.add("推送到达后允许处理60秒").setCheckable(true);
 
         menu.add("全选包含 FCM 的应用");
 
@@ -443,6 +467,9 @@ public class MainActivity extends AppCompatActivity {
             }
             if("目标无响应时代发提示通知".equals(item.getTitle())){
                 item.setChecked(this.config.optBoolean("noResponseNotification", false));
+            }
+            if("推送到达后允许处理60秒".equals(item.getTitle())){
+                item.setChecked(this.config.optBoolean("pushProcessingWindow", true));
             }
             if("全选包含 FCM 的应用".equals(item.getTitle())){
                 item.setOnMenuItemClickListener(menuItem -> {
@@ -477,6 +504,15 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     public final boolean onOptionsItemSelected(MenuItem menuItem) {
+        if("推送到达后允许处理60秒".equals(menuItem.getTitle())){
+            try {
+                this.config.put("pushProcessingWindow", !menuItem.isChecked());
+                this.updateConfig();
+            } catch (JSONException e) {
+                Log.e("onOptionsItemSelected", e.toString());
+            }
+            return true;
+        }
         if(menuItem.getTitle().equals("隐藏启动器图标")){
             PackageManager packageManager = getPackageManager();
             packageManager.setComponentEnabledSetting(

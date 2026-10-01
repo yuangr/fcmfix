@@ -17,7 +17,8 @@ public final class ConfigMigration {
                 .putStringSet("allowList", snapshot.allowList)
                 .putBoolean("disableAutoCleanNotification", snapshot.disableAutoCleanNotification)
                 .putBoolean("includeIceBoxDisableApp", snapshot.includeIceBoxDisableApp)
-                .putBoolean("noResponseNotification", snapshot.noResponseNotification).commit();
+                .putBoolean("noResponseNotification", snapshot.noResponseNotification)
+                .putBoolean("pushProcessingWindow", snapshot.pushProcessingWindow).commit();
         if (!saved) return Result.FAILED;
         if (explicitRestore && !local.edit().putBoolean("restoreRemotePending", false).commit()) return Result.FAILED;
         return Result.IMPORTED;
